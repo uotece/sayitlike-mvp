@@ -49,3 +49,11 @@ To test multiplayer locally, open the site in multiple browser tabs or different
 ## Deployment note
 
 This uses WebSockets through Socket.IO. Deploy it on a service that supports long-running Node servers/websockets, such as Render, Railway, Fly.io, or a VPS. Do not deploy this exact server to static hosting only.
+
+
+## Account MVP notes
+
+This version includes simple username/password accounts using server-side password hashing.
+Accounts are stored in `data/users.json`.
+
+For local testing this is fine. On Render, use a persistent disk for `data/` if you want accounts and leaderboard stats to survive restarts/redeploys.

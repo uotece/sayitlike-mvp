@@ -25,7 +25,7 @@
         </div>
       </div>
 
-      <section class="account-card" aria-label="Account card">
+      <section class="account-card" id="accountCard" aria-label="Account card" role="button" tabindex="0">
         <div class="account-top">
           <div class="discord-pixel">☻</div>
           <div>
@@ -36,7 +36,7 @@
         </div>
         <div class="account-stats">
           <div class="label">VOICEBUCKS</div><div class="label">LEVEL</div>
-          <div class="money">0 B</div><div class="level">1</div>
+          <div class="money" id="accountWins">0 W</div><div class="level" id="accountLevel">1</div>
           <div class="thin-bar"></div>
         </div>
       </section>
@@ -239,6 +239,45 @@
         </div>
       </section>
 
+
+      <section class="modal-wrap screen" id="accountScreen">
+        <div class="modal small">
+          <button class="modal-close back-btn" data-screen="homeScreen">X</button>
+          <div class="modal-inner">
+            <h2 class="modal-title">ACCOUNT</h2>
+            <div class="modal-kicker">CREATE ACCOUNT OR SIGN IN</div>
+
+            <div id="authGuestPanel" class="auth-panel">
+              <div class="auth-form">
+                <label for="authUsername">USERNAME</label>
+                <input id="authUsername" maxlength="16" placeholder="username" autocomplete="username" />
+
+                <label for="authPassword">PASSWORD</label>
+                <input id="authPassword" type="password" maxlength="72" placeholder="password" autocomplete="current-password" />
+
+                <div class="action-row">
+                  <button class="pixel-btn" id="signupBtn">CREATE ACCOUNT</button>
+                  <button class="pixel-btn dark" id="loginBtn">LOGIN</button>
+                </div>
+
+                <p class="tiny-note">Usernames: 3-16 characters. Letters, numbers, _ and - only.</p>
+              </div>
+            </div>
+
+            <div id="authUserPanel" class="auth-panel" hidden>
+              <div class="player-chip">
+                <span id="authSignedUsername">SIGNED_IN</span>
+                <small id="authSignedStats">0 WINS</small>
+              </div>
+              <p class="tiny-note">Your username will be used automatically in rooms and leaderboard.</p>
+              <div class="action-row">
+                <button class="pixel-btn dark back-btn" id="logoutBtn">LOGOUT</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
       <section class="modal-wrap screen" id="donateScreen">
         <div class="modal small">
           <button class="modal-close back-btn" data-screen="homeScreen">X</button>
@@ -264,7 +303,7 @@
           <a href="#">DISCORD</a>
           <a href="#" data-screen="donateScreen">DONATE</a>
         </nav>
-        <div class="status">ACTIVE PLAYERS: <span id="activePlayers">000</span> <span class="dot"></span> V 0.2.3 <span class="dot red"></span></div>
+        <div class="status">ACTIVE PLAYERS: <span id="activePlayers">000</span> <span class="dot"></span> V 0.3.0 <span class="dot red"></span></div>
       </footer>
     </main>
   </div>

@@ -31,6 +31,7 @@ const screens = {
   results: $('#resultsScreen'),
   how: $('#howScreen'),
   hall: $('#hallScreen'),
+  account: $('#accountScreen'),
   donate: $('#donateScreen')
 };
 
@@ -87,6 +88,12 @@ function showScreen(screenId) {
 }
 
 function getName() {
+  if (authUser?.username) {
+    $('#playerName').value = authUser.username;
+    $('#accountName').textContent = authUser.username.toUpperCase().replace(/\s+/g, '_') + '_';
+    return authUser.username;
+  }
+
   const nameInput = $('#playerName');
   const clean = String(nameInput.value || '').trim().slice(0, 16) || 'Guest';
   localStorage.setItem('sayitlike_name', clean);
@@ -99,6 +106,101 @@ function setNameFromStorage() {
   $('#playerName').value = saved;
   $('#accountName').textContent = saved.toUpperCase().replace(/\s+/g, '_') + '_';
 }
+
+async function authRequest(path, body = null) {
+  const options = {
+    method: body ? 'POST' : 'GET',
+    credentials: 'include',
+    headers: {}
+  };
+
+  if (body) {
+    options.headers['Content-Type'] = 'application/json';
+    options.body = JSON.stringify(body);
+  }
+
+  const res = await fetch(path, options);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || 'Account request failed.');
+  return data;
+}
+
+function renderAuthUI() {
+  const isSignedIn = !!authUser;
+  $('#authGuestPanel').hidden = isSignedIn;
+  $('#authUserPanel').hidden = !isSignedIn;
+
+  if (isSignedIn) {
+    const display = authUser.username.toUpperCase().replace(/\s+/g, '_') + '_';
+    $('#accountName').textContent = display;
+    $('#playerName').value = authUser.username;
+    $('#playerName').disabled = true;
+    $('#authSignedUsername').textContent = display;
+    $('#authSignedStats').textContent = `${authUser.wins || 0} WINS • ${authUser.gamesPlayed || 0} GAMES`;
+    $('#accountWins').textContent = `${authUser.wins || 0} W`;
+    $('#accountLevel').textContent = String(Math.max(1, Math.floor((authUser.wins || 0) / 3) + 1));
+  } else {
+    $('#playerName').disabled = false;
+    $('#accountWins').textContent = '0 W';
+    $('#accountLevel').textContent = '1';
+    setNameFromStorage();
+  }
+}
+
+async function loadAuthUser() {
+  try {
+    const data = await authRequest('/api/auth/me');
+    authUser = data.user || null;
+    renderAuthUI();
+  } catch {
+    authUser = null;
+    renderAuthUI();
+  }
+}
+
+async function signup() {
+  try {
+    const username = $('#authUsername').value;
+    const password = $('#authPassword').value;
+    const data = await authRequest('/api/auth/signup', { username, password });
+    authUser = data.user;
+    renderAuthUI();
+    socket.emit('auth:refresh');
+    showToast('Account created.');
+    showScreen('playScreen');
+  } catch (err) {
+    showToast(err.message, true);
+  }
+}
+
+async function login() {
+  try {
+    const username = $('#authUsername').value;
+    const password = $('#authPassword').value;
+    const data = await authRequest('/api/auth/login', { username, password });
+    authUser = data.user;
+    renderAuthUI();
+    socket.emit('auth:refresh');
+    showToast('Logged in.');
+    showScreen('playScreen');
+  } catch (err) {
+    showToast(err.message, true);
+  }
+}
+
+async function logout() {
+  try {
+    await authRequest('/api/auth/logout', {});
+  } catch {
+    // Keep going locally even if the logout request fails.
+  }
+  authUser = null;
+  renderAuthUI();
+  socket.emit('auth:refresh');
+  showToast('Logged out.');
+  showScreen('homeScreen');
+}
+
 
 function setVolumeUI() {
   $('#volumeSlider').value = uiVolume;
@@ -201,7 +303,7 @@ function renderLeaderboard(list = leaderboard) {
     const row = document.createElement('tr');
     row.innerHTML = `
       <td class="rank ${rankClass}">${entry.rank}</td>
-      <td class="player">${escapeHtml(entry.name)}</td>
+      <td class="player">${escapeHtml(entry.name)}${entry.isAccount ? ' ✓' : ''}</td>
       <td class="score">${entry.wins}</td>
       <td>${entry.winRate}%</td>
     `;
@@ -408,6 +510,7 @@ function renderResults(payload) {
     `;
     list.appendChild(row);
   });
+  loadAuthUser();
   winSound();
   showScreen('resultsScreen');
 }
@@ -429,10 +532,21 @@ function setQuickTab(tab) {
 function initEvents() {
   setNameFromStorage();
   setVolumeUI();
+  loadAuthUser();
   renderQuickRooms([]);
   renderLeaderboard([]);
 
   $('#playerName').addEventListener('input', getName);
+  $('#accountCard').addEventListener('click', () => showScreen('accountScreen'));
+  $('#accountCard').addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' || event.key === ' ') showScreen('accountScreen');
+  });
+  $('#signupBtn').addEventListener('click', signup);
+  $('#loginBtn').addEventListener('click', login);
+  $('#logoutBtn').addEventListener('click', logout);
+  $('#authPassword').addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') login();
+  });
 
   document.addEventListener('pointerdown', (event) => {
     const clicky = event.target.closest('button, a');
@@ -514,7 +628,13 @@ function initEvents() {
   }
 }
 
-socket.on('app:hello', (payload) => { myId = payload.playerId; });
+socket.on('app:hello', (payload) => {
+  myId = payload.playerId;
+  if ('user' in payload) {
+    authUser = payload.user || authUser;
+    renderAuthUI();
+  }
+});
 socket.on('app:error', (message) => showToast(message, true));
 socket.on('game:notice', (message) => showToast(message));
 socket.on('quick:list', renderQuickRooms);
