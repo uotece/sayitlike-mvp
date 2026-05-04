@@ -1,4 +1,7 @@
 // Firebase web app config for SayItLike.
+// app.js expects authUser to exist before its event handlers run.
+var authUser = null;
+
 window.SAYITLIKE_FIREBASE_CONFIG = {
   apiKey: "AIzaSyBO-jyE_pYBwBi9OfnQ5rziH8_j3n3OrL0",
   authDomain: "sayitlike-90bd3.firebaseapp.com",
