@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SayItLike MVP</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="game-shell">
+    <main class="game-frame">
+      <div class="audio-ui">
+        <button class="sound-box" id="soundToggle" aria-label="Audio settings" title="Audio settings">
+          <svg viewBox="0 0 24 24" class="sound-icon" aria-hidden="true">
+            <path d="M3 9h4l5-4v14l-5-4H3z" fill="currentColor"></path>
+            <path d="M16 9c1.2 1 1.8 2 1.8 3s-.6 2-1.8 3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square"></path>
+            <path d="M19 6.5c2 1.8 3 3.6 3 5.5s-1 3.7-3 5.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square"></path>
+          </svg>
+        </button>
+        <div class="volume-panel" id="volumePanel">
+          <div class="volume-row">
+            <input type="range" id="volumeSlider" min="0" max="100" value="70" />
+            <span id="volumeValue">70%</span>
+          </div>
+        </div>
+      </div>
+
+      <section class="account-card" aria-label="Account card">
+        <div class="account-top">
+          <div class="discord-pixel">☻</div>
+          <div>
+            <div class="account-name" id="accountName">GUEST_</div>
+            <div class="account-label">ACCOUNT</div>
+          </div>
+          <div class="account-caret">∨</div>
+        </div>
+        <div class="account-stats">
+          <div class="label">VOICEBUCKS</div><div class="label">LEVEL</div>
+          <div class="money">0 B</div><div class="level">1</div>
+          <div class="thin-bar"></div>
+        </div>
+      </section>
+
+      <section class="center-stack screen active" id="homeScreen">
+        <div class="logo-symbol" aria-hidden="true">
+          <svg viewBox="0 0 80 86">
+            <rect x="31" y="8" width="18" height="8" fill="#f8fafc"/><rect x="27" y="16" width="26" height="8" fill="#8b5cf6"/><rect x="23" y="24" width="34" height="30" fill="#7c3aed"/><rect x="29" y="30" width="22" height="18" fill="#4c1d95"/><rect x="34" y="34" width="12" height="10" fill="#f8fafc"/><rect x="18" y="34" width="5" height="10" fill="#f8fafc"/><rect x="57" y="34" width="5" height="10" fill="#f8fafc"/><rect x="36" y="54" width="8" height="14" fill="#f8fafc"/><rect x="26" y="68" width="28" height="6" fill="#f8fafc"/><rect x="20" y="74" width="40" height="6" fill="#8b5cf6"/><rect x="54" y="16" width="6" height="6" fill="#f8fafc"/><rect x="18" y="16" width="5" height="6" fill="#2dd4bf"/>
+          </svg>
+        </div>
+        <h1 class="logo-title">SAY IT LIKE</h1>
+        <p class="logo-subtitle">ONE LINE • ONE ACTING STYLE • VOTE FOR BEST PERFORMANCE</p>
+        <div class="menu-panel">
+          <button class="menu-btn active" data-screen="playScreen"><strong>PLAY</strong><small>CREATE OR JOIN A VOICE BATTLE</small></button>
+          <button class="menu-btn" data-screen="howScreen"><strong>HOW TO PLAY</strong><small>RULES + ROUND FLOW</small></button>
+          <button class="menu-btn" data-screen="hallScreen"><strong>LEADERBOARD</strong><small>HALL OF VOICES</small></button>
+        </div>
+      </section>
+
+      <section class="center-stack screen" id="playScreen">
+        <div class="mini-title">PLAY</div>
+        <div class="player-name-box">
+          <label for="playerName">YOUR NAME</label>
+          <input id="playerName" maxlength="16" placeholder="Guest" autocomplete="off" />
+        </div>
+        <div class="menu-panel">
+          <button class="menu-btn active" id="quickBattleBtn"><strong>QUICK BATTLE</strong><small>MATCHMAKE INSTANTLY</small></button>
+          <button class="menu-btn" data-screen="customScreen"><strong>CUSTOM MODE</strong><small>CREATE OR JOIN BY CODE</small></button>
+          <button class="menu-btn back-btn" data-screen="homeScreen"><strong>BACK</strong><small>RETURN TO MAIN MENU</small></button>
+        </div>
+      </section>
+
+      <section class="center-stack screen" id="customScreen">
+        <div class="mini-title">CUSTOM MODE</div>
+        <div class="custom-panel">
+          <button class="pixel-btn full" id="createRoomBtn">CREATE PRIVATE ROOM</button>
+          <div class="join-row">
+            <input id="roomCodeInput" maxlength="5" placeholder="ROOM CODE" autocomplete="off" />
+            <button class="pixel-btn" id="joinRoomBtn">JOIN</button>
+          </div>
+        </div>
+        <div class="menu-panel slim">
+          <button class="menu-btn back-btn" data-screen="playScreen"><strong>BACK</strong><small>RETURN TO PLAY MENU</small></button>
+        </div>
+      </section>
+
+      <section class="modal-wrap screen" id="lobbyScreen">
+        <div class="modal small">
+          <button class="modal-close back-btn" id="leaveLobbyBtn">X</button>
+          <div class="modal-inner">
+            <h2 class="modal-title">LOBBY</h2>
+            <div class="modal-kicker">ROOM <span id="roomCodeDisplay">-----</span> • <span id="lobbyMode">CUSTOM</span></div>
+            <div class="room-share">
+              <input id="roomLink" readonly value="" />
+              <button class="pixel-btn" id="copyRoomBtn">COPY LINK</button>
+            </div>
+            <div class="section players-section">
+              <h3>PLAYERS</h3>
+              <div>
+                <div id="playersList" class="players-list"></div>
+                <p class="tiny-note">Max 10 players. Host starts the round.</p>
+              </div>
+            </div>
+            <div class="action-row">
+              <button class="pixel-btn" id="startRoundBtn">START ROUND</button>
+              <button class="pixel-btn dark back-btn" id="leaveLobbyBtn2">LEAVE</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="modal-wrap screen" id="recordScreen">
+        <div class="modal">
+          <div class="modal-inner">
+            <h2 class="modal-title">RECORD</h2>
+            <div class="modal-kicker">60 SECONDS TO SUBMIT • 10 SECOND MAX CLIP</div>
+            <div class="timer" id="recordTimer">60</div>
+            <div class="prompt-board">
+              <div class="prompt-card"><div class="prompt-label">LINE</div><div class="prompt-value" id="roundLine">I can explain.</div></div>
+              <div class="prompt-card"><div class="prompt-label">ACTING STYLE</div><div class="prompt-value" id="roundStyle">like a supervillain</div></div>
+            </div>
+            <div class="recorder-panel">
+              <div class="recorder-buttons">
+                <button class="pixel-btn" id="recordBtn">RECORD</button>
+                <button class="pixel-btn dark" id="stopBtn" disabled>STOP</button>
+                <button class="pixel-btn" id="submitClipBtn" disabled>SUBMIT CLIP</button>
+              </div>
+              <div class="clip-status" id="clipStatus">Waiting for microphone.</div>
+              <audio id="previewAudio" controls hidden></audio>
+            </div>
+            <div class="waiting-bar"><span id="submittedCount">0</span>/<span id="totalPlayers">0</span> submitted</div>
+          </div>
+        </div>
+      </section>
+
+      <section class="modal-wrap screen" id="votingScreen">
+        <div class="modal">
+          <div class="modal-inner">
+            <h2 class="modal-title">VOTE</h2>
+            <div class="modal-kicker">LISTEN ANONYMOUSLY • VOTE FOR THE BEST PERFORMANCE</div>
+            <div class="timer" id="voteTimer">45</div>
+            <div class="prompt-board compact">
+              <div class="prompt-card"><div class="prompt-label">LINE</div><div class="prompt-value" id="voteLine">—</div></div>
+              <div class="prompt-card"><div class="prompt-label">STYLE</div><div class="prompt-value" id="voteStyle">—</div></div>
+            </div>
+            <div id="clipList" class="clip-list"></div>
+            <div class="waiting-bar"><span id="votedCount">0</span> votes in</div>
+          </div>
+        </div>
+      </section>
+
+      <section class="modal-wrap screen" id="resultsScreen">
+        <div class="modal">
+          <div class="modal-inner">
+            <h2 class="modal-title">RESULTS</h2>
+            <div class="modal-kicker" id="winnerText">WINNER REVEALED</div>
+            <div id="resultsList" class="results-list"></div>
+            <div class="action-row">
+              <button class="pixel-btn" id="playAgainBtn">PLAY AGAIN</button>
+              <button class="pixel-btn dark back-btn" id="backToLobbyBtn">BACK TO LOBBY</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="modal-wrap screen" id="howScreen">
+        <div class="modal">
+          <button class="modal-close back-btn" data-screen="homeScreen">X</button>
+          <div class="modal-inner">
+            <h2 class="modal-title">HOW TO PLAY</h2>
+            <div class="modal-kicker">THE WHOLE GAME IN ONE ROUND</div>
+            <div class="section"><h3>1. GET A PROMPT</h3><p>Everyone receives the same <strong>line</strong> and the same <strong>acting style</strong>.</p></div>
+            <div class="section"><h3>2. RECORD</h3><p>You have 60 seconds to submit a voice clip. The clip can be 10 seconds max.</p></div>
+            <div class="section"><h3>3. VOTE</h3><p>All clips play anonymously. You vote for the best performance. You cannot vote for yourself.</p></div>
+            <div class="section"><h3>4. REVEAL</h3><p>Names are revealed after voting. Most votes wins. Ties share the win.</p></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="modal-wrap screen" id="hallScreen">
+        <div class="modal">
+          <button class="modal-close back-btn" data-screen="homeScreen">X</button>
+          <div class="modal-inner">
+            <h2 class="modal-title">HALL OF VOICES</h2>
+            <div class="modal-kicker">STATIC MOCKUP FOR NOW</div>
+            <table class="table">
+              <thead><tr><th>RANK</th><th>PLAYER</th><th>WINS</th><th>WIN RATE</th></tr></thead>
+              <tbody>
+                <tr><td class="rank gold">1</td><td class="player">GUEST_</td><td class="score">12</td><td>58%</td></tr>
+                <tr><td class="rank silver">2</td><td class="player">VOICEGOBLIN</td><td class="score">9</td><td>46%</td></tr>
+                <tr><td class="rank bronze">3</td><td class="player">DRAMA_KING</td><td class="score">7</td><td>42%</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section class="modal-wrap screen" id="donateScreen">
+        <div class="modal small">
+          <button class="modal-close back-btn" data-screen="homeScreen">X</button>
+          <div class="modal-inner">
+            <h2 class="modal-title">DONATE</h2>
+            <div class="modal-kicker">FREE GAME • SUPPORT OPTIONAL</div>
+            <p class="donate-copy">This is a free MVP. Donation buttons are placeholders until payment is connected.</p>
+            <div class="donate-grid">
+              <div class="donate-card"><strong>$1</strong><span>tiny laugh tax</span><button class="pixel-btn">DONATE</button></div>
+              <div class="donate-card"><strong>$3</strong><span>buy us a coffee</span><button class="pixel-btn">DONATE</button></div>
+              <div class="donate-card"><strong>$5</strong><span>absolute legend</span><button class="pixel-btn">DONATE</button></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="toast" id="toast" hidden></section>
+
+      <footer class="footer-bar">
+        <nav class="footer-links">
+          <a href="#" data-screen="howScreen">PATCH NOTES</a>
+          <a href="#" data-screen="howScreen">HOW TO PLAY</a>
+          <a href="#">DISCORD</a>
+          <a href="#" data-screen="donateScreen">DONATE</a>
+        </nav>
+        <div class="status">ACTIVE PLAYERS: <span id="activePlayers">000</span> <span class="dot"></span> V 0.2.0 <span class="dot red"></span></div>
+      </footer>
+    </main>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

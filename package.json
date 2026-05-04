@@ -1,0 +1,17 @@
+{
+  "name": "sayitlike-mvp",
+  "version": "0.2.0",
+  "description": "SayItLike MVP - multiplayer voice acting party game",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.3",
+    "socket.io": "^4.7.5"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
