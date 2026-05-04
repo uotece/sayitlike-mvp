@@ -37,7 +37,7 @@ const screens = {
   credits: $('#creditsScreen')
 };
 
-const screenIds = new Set(Object.values(screens).filter(Boolean).map((el) => el.id));
+const screenIds = new Set(Object.values(screens).map((el) => el.id));
 
 function getAudioContext() {
   if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -81,19 +81,9 @@ function showToast(message, isError = false) {
 }
 
 function showScreen(screenId) {
-  if (!screenIds.has(screenId)) {
-    console.warn('Unknown screen:', screenId);
-    return;
-  }
-
+  if (!screenIds.has(screenId)) return;
   $$('.screen').forEach((el) => el.classList.remove('active'));
   const target = document.getElementById(screenId);
-
-  if (!target) {
-    console.warn('Screen element missing:', screenId);
-    return;
-  }
-
   target.classList.add('active');
   if (screenId === 'quickScreen') socket.emit('quick:list');
   if (screenId === 'hallScreen') socket.emit('leaderboard:get');
@@ -216,12 +206,19 @@ async function resolveLoginEmail(identifier) {
 function renderAuthUI() {
   const isSignedIn = !!authUser;
 
-  $('#authChoicePanel').hidden = isSignedIn;
-  $('#authSignupPanel').hidden = true;
-  $('#authLoginPanel').hidden = true;
-  $('#authForgotPanel').hidden = true;
-  $('#authUserPanel').hidden = !isSignedIn;
-  $('#authKicker').textContent = isSignedIn ? 'SIGNED IN' : 'CREATE ACCOUNT OR SIGN IN';
+  const choice = $('#authChoicePanel');
+  const signupPanel = $('#authSignupPanel');
+  const loginPanel = $('#authLoginPanel');
+  const forgotPanel = $('#authForgotPanel');
+  const userPanel = $('#authUserPanel');
+  const kicker = $('#authKicker');
+
+  if (choice) choice.hidden = isSignedIn;
+  if (signupPanel) signupPanel.hidden = true;
+  if (loginPanel) loginPanel.hidden = true;
+  if (forgotPanel) forgotPanel.hidden = true;
+  if (userPanel) userPanel.hidden = !isSignedIn;
+  if (kicker) kicker.textContent = isSignedIn ? 'SIGNED IN' : 'CREATE ACCOUNT OR SIGN IN';
 
   if (isSignedIn) {
     const display = authUser.username.toUpperCase().replace(/\s+/g, '_');
@@ -247,11 +244,18 @@ function showAuthPanel(panelName) {
     return;
   }
 
-  $('#authChoicePanel').hidden = panelName !== 'choice';
-  $('#authSignupPanel').hidden = panelName !== 'signup';
-  $('#authLoginPanel').hidden = panelName !== 'login';
-  $('#authForgotPanel').hidden = panelName !== 'forgot';
-  $('#authUserPanel').hidden = true;
+  const choice = $('#authChoicePanel');
+  const signupPanel = $('#authSignupPanel');
+  const loginPanel = $('#authLoginPanel');
+  const forgotPanel = $('#authForgotPanel');
+  const userPanel = $('#authUserPanel');
+  const kicker = $('#authKicker');
+
+  if (choice) choice.hidden = panelName !== 'choice';
+  if (signupPanel) signupPanel.hidden = panelName !== 'signup';
+  if (loginPanel) loginPanel.hidden = panelName !== 'login';
+  if (forgotPanel) forgotPanel.hidden = panelName !== 'forgot';
+  if (userPanel) userPanel.hidden = true;
 
   const titles = {
     choice: 'CREATE ACCOUNT OR SIGN IN',
@@ -260,7 +264,7 @@ function showAuthPanel(panelName) {
     forgot: 'PASSWORD RECOVERY'
   };
 
-  $('#authKicker').textContent = titles[panelName] || titles.choice;
+  if (kicker) kicker.textContent = titles[panelName] || titles.choice;
 }
 
 async function loadAuthUser() {
@@ -350,19 +354,6 @@ async function logout() {
   showScreen('homeScreen');
 }
 
-function onSafe(selector, eventName, handler) {
-  const element = $(selector);
-  if (!element) {
-    console.warn('Missing element for event listener:', selector);
-    return;
-  }
-  element.addEventListener(eventName, handler);
-}
-
-function onClickSafe(selector, handler) {
-  onSafe(selector, 'click', handler);
-}
-
 function setQuickTab(tab) {
   $$('.browser-tab').forEach((btn) => btn.classList.toggle('active', btn.dataset.quickTab === tab));
   $('#quickRoomsPane').classList.toggle('active', tab === 'rooms');
@@ -376,46 +367,31 @@ function initEvents() {
   renderQuickRooms([]);
   renderLeaderboard([]);
 
-  // Navigation is attached first so a missing account-form element cannot kill the whole UI.
-  $$('[data-screen]').forEach((el) => {
-    el.addEventListener('click', (event) => {
-      event.preventDefault();
-      const targetScreen = el.dataset.screen;
-      if (['playScreen', 'quickScreen', 'customScreen', 'lobbyScreen', 'recordScreen', 'votingScreen'].includes(targetScreen) && !requireLoginToPlay()) {
-        return;
-      }
-      showScreen(targetScreen);
-    });
-  });
-
-  onSafe('#playerName', 'input', getName);
-
-  onClickSafe('#accountCard', () => showScreen('accountScreen'));
-  onSafe('#accountCard', 'keydown', (event) => {
+  $('#playerName').addEventListener('input', getName);
+  $('#accountCard').addEventListener('click', () => showScreen('accountScreen'));
+  $('#accountCard').addEventListener('keydown', (event) => {
     if (event.key === 'Enter' || event.key === ' ') showScreen('accountScreen');
   });
+  $('#showSignupBtn').addEventListener('click', () => showAuthPanel('signup'));
+  $('#showLoginBtn').addEventListener('click', () => showAuthPanel('login'));
+  $('#signupBackBtn').addEventListener('click', () => showAuthPanel('choice'));
+  $('#loginBackBtn').addEventListener('click', () => showAuthPanel('choice'));
+  $('#forgotBackBtn').addEventListener('click', () => showAuthPanel('login'));
+  $('#showForgotBtn').addEventListener('click', () => showAuthPanel('forgot'));
 
-  onClickSafe('#showSignupBtn', () => showAuthPanel('signup'));
-  onClickSafe('#showLoginBtn', () => showAuthPanel('login'));
-  onClickSafe('#signupBackBtn', () => showAuthPanel('choice'));
-  onClickSafe('#loginBackBtn', () => showAuthPanel('choice'));
-  onClickSafe('#forgotBackBtn', () => showAuthPanel('login'));
-  onClickSafe('#showForgotBtn', () => showAuthPanel('forgot'));
-
-  onClickSafe('#signupBtn', signup);
-  onClickSafe('#loginBtn', login);
-  onClickSafe('#resetPasswordBtn', sendPasswordReset);
-  onClickSafe('#logoutBtn', logout);
-
+  $('#signupBtn').addEventListener('click', signup);
+  $('#loginBtn').addEventListener('click', login);
+  $('#resetPasswordBtn').addEventListener('click', sendPasswordReset);
+  $('#logoutBtn').addEventListener('click', logout);
   localStorage.removeItem('sayitlike_last_username');
 
-  onSafe('#signupPassword', 'keydown', (event) => {
+  $('#signupPassword').addEventListener('keydown', (event) => {
     if (event.key === 'Enter') signup();
   });
-  onSafe('#loginPassword', 'keydown', (event) => {
+  $('#loginPassword').addEventListener('keydown', (event) => {
     if (event.key === 'Enter') login();
   });
-  onSafe('#forgotIdentifier', 'keydown', (event) => {
+  $('#forgotIdentifier').addEventListener('keydown', (event) => {
     if (event.key === 'Enter') sendPasswordReset();
   });
 
@@ -427,83 +403,80 @@ function initEvents() {
     else if (clicky.classList.contains('pixel-btn') || clicky.classList.contains('vote-btn')) actionSound();
   });
 
-  onClickSafe('#soundToggle', (event) => {
-    event.stopPropagation();
-    $('#volumePanel')?.classList.toggle('open');
-    softSound();
+  $$('[data-screen]').forEach((el) => {
+    el.addEventListener('click', (event) => {
+      event.preventDefault();
+      const targetScreen = el.dataset.screen;
+      if (['playScreen', 'quickScreen', 'customScreen', 'lobbyScreen', 'recordScreen', 'votingScreen'].includes(targetScreen) && !requireLoginToPlay()) {
+        return;
+      }
+      showScreen(targetScreen);
+    });
   });
 
+  $('#soundToggle').addEventListener('click', (event) => {
+    event.stopPropagation();
+    $('#volumePanel').classList.toggle('open');
+    softSound();
+  });
   document.addEventListener('click', (event) => {
     const panel = $('#volumePanel');
     const toggle = $('#soundToggle');
-    if (panel && toggle && !panel.contains(event.target) && !toggle.contains(event.target)) {
-      panel.classList.remove('open');
-    }
+    if (!panel.contains(event.target) && !toggle.contains(event.target)) panel.classList.remove('open');
   });
-
-  onSafe('#volumeSlider', 'input', () => {
+  $('#volumeSlider').addEventListener('input', () => {
     uiVolume = Number($('#volumeSlider').value);
     $('#volumeValue').textContent = `${uiVolume}%`;
     localStorage.setItem('sayitlike_volume', String(uiVolume));
   });
+  $('#volumeSlider').addEventListener('change', () => beep(740, 0.055, 0.7));
 
-  onSafe('#volumeSlider', 'change', () => beep(740, 0.055, 0.7));
-
-  onClickSafe('#quickBattleMenuBtn', () => {
-    if (!requireLoginToPlay()) return;
+  $('#quickBattleMenuBtn').addEventListener('click', () => {
     setQuickTab('rooms');
     socket.emit('quick:list');
   });
-
   $$('.browser-tab').forEach((btn) => btn.addEventListener('click', () => setQuickTab(btn.dataset.quickTab)));
-
-  onClickSafe('#refreshQuickRoomsBtn', () => socket.emit('quick:list'));
-
-  onClickSafe('#createQuickRoomBtn', () => {
+  $('#refreshQuickRoomsBtn').addEventListener('click', () => socket.emit('quick:list'));
+  $('#createQuickRoomBtn').addEventListener('click', () => {
     if (!requireLoginToPlay()) return;
     socket.emit('quick:create', { name: getName() });
   });
-
-  onClickSafe('#joinQuickRoomBtn', () => {
+  $('#joinQuickRoomBtn').addEventListener('click', () => {
     if (!requireLoginToPlay()) return;
-    socket.emit('quick:join', { name: getName(), code: $('#quickRoomCodeInput')?.value || '' });
+    socket.emit('quick:join', { name: getName(), code: $('#quickRoomCodeInput').value });
   });
-
-  onSafe('#quickRoomCodeInput', 'input', (e) => { e.target.value = e.target.value.toUpperCase(); });
-  onSafe('#quickRoomCodeInput', 'keydown', (e) => { if (e.key === 'Enter') $('#joinQuickRoomBtn')?.click(); });
-
-  onSafe('#quickRoomsList', 'click', (e) => {
+  $('#quickRoomCodeInput').addEventListener('input', (e) => { e.target.value = e.target.value.toUpperCase(); });
+  $('#quickRoomCodeInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('#joinQuickRoomBtn').click(); });
+  $('#quickRoomsList').addEventListener('click', (e) => {
     const card = e.target.closest('.room-card');
     if (!card) return;
     if (!requireLoginToPlay()) return;
     socket.emit('quick:join', { name: getName(), code: card.dataset.code });
   });
 
-  onClickSafe('#createRoomBtn', () => {
+  $('#createRoomBtn').addEventListener('click', () => {
     if (!requireLoginToPlay()) return;
     socket.emit('custom:create', { name: getName() });
   });
-
-  onClickSafe('#joinRoomBtn', () => {
+  $('#joinRoomBtn').addEventListener('click', () => {
     if (!requireLoginToPlay()) return;
-    socket.emit('custom:join', { name: getName(), code: $('#roomCodeInput')?.value || '' });
+    socket.emit('custom:join', { name: getName(), code: $('#roomCodeInput').value });
   });
+  $('#roomCodeInput').addEventListener('input', (e) => { e.target.value = e.target.value.toUpperCase(); });
+  $('#roomCodeInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('#joinRoomBtn').click(); });
 
-  onSafe('#roomCodeInput', 'input', (e) => { e.target.value = e.target.value.toUpperCase(); });
-  onSafe('#roomCodeInput', 'keydown', (e) => { if (e.key === 'Enter') $('#joinRoomBtn')?.click(); });
+  $('#startRoundBtn').addEventListener('click', () => socket.emit('round:start'));
+  $('#playAgainBtn').addEventListener('click', () => socket.emit('round:start'));
+  $('#backToLobbyBtn').addEventListener('click', () => showScreen('lobbyScreen'));
+  $('#leaveLobbyBtn').addEventListener('click', leaveRoom);
+  $('#leaveLobbyBtn2').addEventListener('click', leaveRoom);
+  $('#copyRoomBtn').addEventListener('click', () => copyText($('#roomLink').value));
 
-  onClickSafe('#startRoundBtn', () => socket.emit('round:start'));
-  onClickSafe('#playAgainBtn', () => socket.emit('round:start'));
-  onClickSafe('#backToLobbyBtn', () => showScreen('lobbyScreen'));
-  onClickSafe('#leaveLobbyBtn', leaveRoom);
-  onClickSafe('#leaveLobbyBtn2', leaveRoom);
-  onClickSafe('#copyRoomBtn', () => copyText($('#roomLink')?.value || ''));
+  $('#recordBtn').addEventListener('click', startRecording);
+  $('#stopBtn').addEventListener('click', stopRecording);
+  $('#submitClipBtn').addEventListener('click', submitClip);
 
-  onClickSafe('#recordBtn', startRecording);
-  onClickSafe('#stopBtn', stopRecording);
-  onClickSafe('#submitClipBtn', submitClip);
-
-  onSafe('#clipList', 'click', (event) => {
+  $('#clipList').addEventListener('click', (event) => {
     const button = event.target.closest('.vote-btn');
     if (!button || button.disabled) return;
     submitVote(button.dataset.clipId);
@@ -511,9 +484,7 @@ function initEvents() {
 
   const roomFromUrl = new URLSearchParams(location.search).get('room');
   if (roomFromUrl) {
-    const roomInput = $('#roomCodeInput');
-    if (roomInput) roomInput.value = roomFromUrl.toUpperCase();
-
+    $('#roomCodeInput').value = roomFromUrl.toUpperCase();
     if (authUser?.username) {
       showScreen('customScreen');
       showToast('Room code loaded. Click JOIN.');

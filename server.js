@@ -193,18 +193,18 @@ app.post('/api/users/resolve-login', async (req, res) => {
       return res.status(400).json({ error: 'Invalid username.' });
     }
 
-    const usernameKey = username.toLowerCase();
-    const usernameSnap = await db.collection('usernames').doc(usernameKey).get();
+    const usernameSnap = await db.collection('usernames').doc(username.toLowerCase()).get();
 
     if (!usernameSnap.exists) {
       return res.status(404).json({ error: 'No account found for that username.' });
     }
 
-    const usernameData = usernameSnap.data();
-    let email = usernameData.email || '';
+    const data = usernameSnap.data();
+    let email = data.email || '';
 
-    if (!email && usernameData.uid) {
-      const userSnap = await db.collection('users').doc(usernameData.uid).get();
+    // Old username docs might not have email stored yet.
+    if (!email && data.uid) {
+      const userSnap = await db.collection('users').doc(data.uid).get();
       if (userSnap.exists) email = userSnap.data().email || '';
     }
 
