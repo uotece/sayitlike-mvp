@@ -253,7 +253,7 @@ function injectPhaseIntro() {
   overlay.hidden = true;
   overlay.innerHTML = `
     <div class="phase-intro-card">
-      <div class="phase-intro-kicker">NEXT CATEGORY</div>
+      <div class="phase-intro-kicker" id="phaseIntroKicker">NEXT PHASE</div>
       <h2 id="phaseIntroTitle">ROUND STARTING</h2>
       <p id="phaseIntroText">Get ready.</p>
     </div>`;
@@ -264,22 +264,24 @@ function injectPhaseIntro() {
   style.textContent = `
     .phase-intro{position:fixed;inset:0;z-index:9999;display:grid;place-items:center;background:rgba(6,3,18,.86);backdrop-filter:blur(2px)}
     .phase-intro[hidden]{display:none!important}
-    .phase-intro-card{width:min(760px,86vw);border:3px solid var(--purple);background:#120822;box-shadow:0 0 44px rgba(124,58,237,.35);padding:34px;text-align:center;animation:phasePop .24s ease-out both}
+    .phase-intro-card{width:min(820px,88vw);border:3px solid var(--purple);background:#120822;box-shadow:0 0 44px rgba(124,58,237,.35);padding:34px;text-align:center;animation:phasePop .24s ease-out both}
     .phase-intro-kicker{color:var(--green);font-family:ui-monospace,monospace;font-size:12px;letter-spacing:2px;text-transform:uppercase;margin-bottom:12px}
-    .phase-intro h2{font-size:clamp(36px,8vw,78px);line-height:.95;margin:0 0 16px;color:#fff4e4;text-transform:uppercase}
+    .phase-intro h2{font-size:clamp(32px,6.4vw,70px);line-height:.95;margin:0 0 16px;color:#fff4e4;text-transform:uppercase;overflow-wrap:normal}
     .phase-intro p{font-family:ui-monospace,monospace;color:var(--muted);font-size:15px;line-height:1.5;margin:0 auto;max-width:640px}
     @keyframes phasePop{from{transform:scale(.9);opacity:0}to{transform:scale(1);opacity:1}}
   `;
   document.head.appendChild(style);
 }
 
-function showPhaseIntro(key, title, text, duration = 8600) {
+function showPhaseIntro(key, kicker, title, text, duration = 8600) {
   if (!key || phaseIntroShown.has(key)) return;
   phaseIntroShown.add(key);
   const overlay = $('#phaseIntroOverlay');
   if (!overlay) return;
+  const kickerEl = $('#phaseIntroKicker');
   const titleEl = $('#phaseIntroTitle');
   const textEl = $('#phaseIntroText');
+  if (kickerEl) kickerEl.textContent = kicker;
   if (titleEl) titleEl.textContent = title;
   if (textEl) textEl.textContent = text;
   overlay.hidden = false;
@@ -406,15 +408,15 @@ function injectAwardsScreens() {
   writing.innerHTML = `
     <div class="modal">
       <div class="modal-inner">
-        <h2 class="modal-title">BEST WRITING</h2>
-        <div class="modal-kicker" id="writingKicker">WRITE YOUR NOMINEE</div>
+        <h2 class="modal-title" id="writingMainTitle">WRITE</h2>
+        <div class="modal-kicker" id="writingKicker" hidden></div>
         <div class="timer" id="writingTimer">45</div>
         <div class="section">
           <h3 id="writingRoleTitle">YOUR CATEGORY</h3>
           <p id="writingInstructions">Write something short.</p>
           <textarea id="promptSubmissionInput" class="prompt-input" maxlength="130" placeholder="Type here..."></textarea>
-          <div class="action-row"><button class="pixel-btn" id="submitPromptBtn">SUBMIT NOMINEE</button></div>
-          <p class="tiny-note" id="writingHint">Keep it short. The winning line and scenario become the final prompt.</p>
+          <div class="action-row"><button class="pixel-btn" id="submitPromptBtn">SUBMIT</button></div>
+          <p class="tiny-note" id="writingHint">Keep it short. The winning line and scenario will be performed by everyone.</p>
         </div>
         <div class="waiting-bar"><span id="writingSubmittedCount">0</span>/<span id="writingTotalPlayers">0</span> submitted</div>
       </div>
@@ -426,8 +428,8 @@ function injectAwardsScreens() {
   promptVote.innerHTML = `
     <div class="modal">
       <div class="modal-inner">
-        <h2 class="modal-title">VOTE THE PROMPT</h2>
-        <div class="modal-kicker">PICK THE LINE AND SCENARIO EVERYONE WILL PERFORM</div>
+        <h2 class="modal-title prompt-vote-title">VOTE FOR THE BEST LINE AND SCENARIO</h2>
+        <div class="modal-kicker">THE MOST VOTED LINE AND SCENARIO WILL BE PERFORMED BY EVERYONE.</div>
         <div class="timer" id="promptVoteTimer">25</div>
         <div class="awards-vote-grid">
           <div class="section"><h3>BEST LINE</h3><div id="lineOptionsList" class="option-list"></div></div>
@@ -456,6 +458,13 @@ function injectAwardsScreens() {
     .award-title{color:var(--green);font-size:12px;text-transform:uppercase;margin-bottom:6px;letter-spacing:1px}
     .award-value{font-size:20px;color:#fff4e4;margin-bottom:6px;line-height:1.15}
     .award-winner{color:var(--muted);font-size:11px;text-transform:uppercase}.award-bucks{color:var(--green);font-size:13px;text-transform:uppercase;margin-top:6px}
+    .prompt-vote-title{font-size:clamp(28px,4.8vw,56px);line-height:.95}
+    #votingScreen .modal-title{font-size:clamp(30px,5vw,58px);line-height:.96}
+    .clip-card{background:#10091d;border:2px solid #3f1d70;border-radius:14px;padding:14px;margin:14px 0;box-shadow:0 0 0 1px rgba(124,58,237,.12)}
+    .clip-title{color:#fff4e4;margin-bottom:8px;letter-spacing:.5px}
+    .clip-card audio{display:block;width:100%;height:42px;margin:8px 0 10px;filter:drop-shadow(0 0 10px rgba(45,212,191,.12))}
+    .clip-card audio::-webkit-media-controls-panel{background:#fff4e4}
+    .clip-card .vote-btn{margin-top:4px}
     @keyframes awardReveal{from{opacity:0;transform:translateY(28px) scale(.96)}to{opacity:1;transform:translateY(0) scale(1)}}
     @keyframes awardPulse{0%,100%{box-shadow:0 0 28px rgba(45,212,191,.25)}50%{box-shadow:0 0 52px rgba(45,212,191,.55)}}
     @keyframes awardShine{to{transform:translateX(130%)}}
@@ -529,18 +538,21 @@ function renderWriting(room) {
   updateTimer(room.remainingSeconds, 'writingTimer');
   const me = myPlayer(room);
   const role = me?.role || 'line';
+  const mainTitle = $('#writingMainTitle');
   const roleTitle = $('#writingRoleTitle');
   const instructions = $('#writingInstructions');
   const input = $('#promptSubmissionInput');
   const submit = $('#submitPromptBtn');
+  if (roleTitle) roleTitle.hidden = true;
+  if (instructions) instructions.hidden = true;
   if (role === 'scenario') {
-    if (roleTitle) roleTitle.textContent = 'WRITE A SCENARIO';
-    if (instructions) instructions.innerHTML = 'Complete the prompt: <strong>Say it like...</strong>';
+    if (mainTitle) mainTitle.textContent = 'WRITE A SCENARIO';
     if (input) input.placeholder = 'you just got caught eating the wedding cake';
+    if (submit) submit.textContent = 'SUBMIT SCENARIO';
   } else {
-    if (roleTitle) roleTitle.textContent = 'WRITE A LINE';
-    if (instructions) instructions.innerHTML = 'Write a short sentence someone can perform out loud.';
+    if (mainTitle) mainTitle.textContent = 'WRITE A LINE';
     if (input) input.placeholder = 'I can explain.';
+    if (submit) submit.textContent = 'SUBMIT LINE';
   }
   if (submit) submit.disabled = !!me?.submitted;
   const submitted = $('#writingSubmittedCount');
@@ -620,6 +632,10 @@ function renderRecording(room) {
 function renderClipVoting(payload = currentPerformanceVotingPayload) {
   if (!payload) return;
   showScreen('votingScreen');
+  const votingTitle = $('#votingScreen .modal-title');
+  const votingKicker = $('#votingScreen .modal-kicker');
+  if (votingTitle) votingTitle.textContent = 'VOTE FOR BEST PERFORMANCE';
+  if (votingKicker) votingKicker.textContent = '';
   updateTimer(payload.remainingSeconds, 'voteTimer');
   const line = $('#voteLine');
   const style = $('#voteStyle');
@@ -675,7 +691,7 @@ function renderResults(payload = currentResultsPayload) {
   const backToLobby = $('#backToLobbyBtn');
   if (backToLobby) {
     backToLobby.hidden = false;
-    backToLobby.textContent = 'BACK TO ROOM';
+    backToLobby.textContent = 'RETURN TO MAIN MENU';
   }
   if (winnerText && payload.remainingSeconds != null) winnerText.textContent = `SAYITLIKE AWARDS CEREMONY • ${payload.remainingSeconds}s`;
 }
@@ -708,19 +724,20 @@ function renderRoom(room) {
 
   if (room.status === 'writing') {
     renderWriting(room);
-    showPhaseIntro(`writing-${room.round}`, 'WRITE THE NOMINEES', 'Half the players write short lines. The other half write scenarios that complete Say it like...', 8600);
+    const writingRole = myPlayer(room)?.role === 'scenario' ? 'WRITE A SCENARIO' : 'WRITE A LINE';
+    showPhaseIntro(`writing-${room.round}`, 'FIRST PHASE', writingRole, 'Half the players in the room write short lines. The other half write scenarios.', 8600);
   }
   if (room.status === 'promptVoting') {
     renderPromptVoting(room, currentPromptVotingPayload);
-    showPhaseIntro(`promptVoting-${room.round}`, 'VOTE THE PROMPT', 'Vote for Best Line and Best Scenario. The winners combine into the final performance prompt.', 8600);
+    showPhaseIntro(`promptVoting-${room.round}`, 'NEXT PHASE', 'VOTE FOR THE BEST LINE AND SCENARIO', 'The most voted line and scenario will be performed by everyone.', 8600);
   }
   if (room.status === 'recording') {
     renderRecording(room);
-    showPhaseIntro(`recording-${room.round}`, 'PERFORM', 'Record your best version of the winning prompt. Commit to it. You get one performance.', 8600);
+    showPhaseIntro(`recording-${room.round}`, 'NEXT PHASE', 'PERFORM', 'Record your best version of the winning prompt. Commit to it. You get one performance.', 8600);
   }
   if (room.status === 'performanceVoting') {
     renderClipVoting(currentPerformanceVotingPayload);
-    showPhaseIntro(`performanceVoting-${room.round}`, 'VOTE PERFORMANCE', 'Listen anonymously and vote for the strongest performance. This award pays the most Bucks.', 8600);
+    showPhaseIntro(`performanceVoting-${room.round}`, 'LAST PHASE', 'VOTE BEST PERFORMANCE', 'Listen and vote for the strongest performance. You cannot vote on yourself. This award pays the most Bucks.', 8600);
   }
   if (room.status === 'results') {
     const resultsPayload = { ...(currentResultsPayload || {}), prompt: room.prompt || currentResultsPayload?.prompt, awards: room.awards || currentResultsPayload?.awards, clips: currentResultsPayload?.clips || [], remainingSeconds: room.remainingSeconds };
@@ -730,7 +747,7 @@ function renderRoom(room) {
       updateLobbyControls(room);
     } else {
       renderResults(resultsPayload);
-      showPhaseIntro(`results-${room.round}`, 'AWARDS CEREMONY', 'The winners are about to be revealed. Best Performance pays the most.', 3600);
+      showPhaseIntro(`results-${room.round}`, 'AWARDS', 'AWARDS CEREMONY', 'The winners are about to be revealed. Best Performance pays the most.', 3600);
     }
   }
 }
@@ -792,6 +809,15 @@ function lockRecorderAfterSubmit() {
   if ($('#clipStatus')) $('#clipStatus').textContent = 'Submitted. Waiting for the other players.';
 }
 
+
+function returnToMainMenuFromResults() {
+  resetLocalRoundState();
+  phaseIntroShown.clear();
+  localResultsDone = false;
+  socket.emit('room:leave');
+  showScreen('homeScreen');
+}
+
 function setupEvents() {
   $$('.menu-btn[data-screen], .back-btn[data-screen]').forEach((btn) => {
     btn.addEventListener('click', () => { menuSound(); showScreen(btn.dataset.screen); });
@@ -832,7 +858,7 @@ function setupEvents() {
   $('#startRoundBtn')?.addEventListener('click', () => socket.emit('round:start'));
   $('#leaveLobbyBtn')?.addEventListener('click', leaveRoom);
   $('#leaveLobbyBtn2')?.addEventListener('click', leaveRoom);
-  $('#backToLobbyBtn')?.addEventListener('click', playAgain);
+  $('#backToLobbyBtn')?.addEventListener('click', returnToMainMenuFromResults);
   $('#playAgainBtn')?.addEventListener('click', playAgain);
   $('#recordBtn')?.addEventListener('click', startRecording);
   $('#stopBtn')?.addEventListener('click', stopRecording);
@@ -896,7 +922,7 @@ function initCopy() {
       <h2 class="modal-title">HOW TO PLAY</h2>
       <div class="modal-kicker">SAYITLIKE AWARDS MODE</div>
       <div class="section"><h3>1. WRITE</h3><p>Half the players write lines. Half write scenarios that complete <strong>Say it like...</strong></p></div>
-      <div class="section"><h3>2. VOTE THE PROMPT</h3><p>Everyone votes for Best Line and Best Scenario. The winners combine into the final prompt.</p></div>
+      <div class="section"><h3>2. VOTE FOR THE BEST LINE AND SCENARIO</h3><p>The most voted line and scenario will be performed by everyone.</p></div>
       <div class="section"><h3>3. PERFORM</h3><p>Everyone records the same winning prompt.</p></div>
       <div class="section"><h3>4. AWARDS</h3><p>Best Performance pays 100 Bucks. Best Line and Best Scenario pay 50 Bucks each.</p></div>`;
   }
@@ -906,8 +932,10 @@ function initCopy() {
   if (voteScenarioLabel) voteScenarioLabel.textContent = 'SCENARIO';
   const recordKicker = $('#recordScreen .modal-kicker');
   if (recordKicker) recordKicker.textContent = '35 SECONDS TO SUBMIT • 10 SECOND MAX CLIP';
+  const votingTitle = $('#votingScreen .modal-title');
+  if (votingTitle) votingTitle.textContent = 'VOTE FOR BEST PERFORMANCE';
   const votingKicker = $('#votingScreen .modal-kicker');
-  if (votingKicker) votingKicker.textContent = 'LISTEN ANONYMOUSLY • VOTE FOR BEST PERFORMANCE';
+  if (votingKicker) votingKicker.textContent = '';
   const voteTimer = $('#voteTimer');
   if (voteTimer) voteTimer.textContent = '45';
   const recordTimer = $('#recordTimer');
