@@ -86,3 +86,11 @@ a{color:inherit;text-decoration:none}button,input{font-family:inherit}button{use
 /* v0.4.1: the play menu no longer asks for a manual name.
    Firebase account username controls the public name. */
 .player-name-box{display:none}
+
+
+/* v0.4.2: prevent long usernames/emails from spilling outside the account card. */
+.account-name{
+  max-width: 126px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

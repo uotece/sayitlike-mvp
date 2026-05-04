@@ -222,6 +222,7 @@ async function signup() {
     const email = $('#authEmail').value.trim();
     const username = $('#authUsername').value.trim();
     const password = $('#authPassword').value;
+    if (username) localStorage.setItem('sayitlike_last_username', username);
 
     const credential = await firebaseAuth.createUserWithEmailAndPassword(email, password);
     await credential.user.updateProfile({ displayName: username });
@@ -240,11 +241,19 @@ async function login() {
   try {
     requireFirebaseClient();
     const email = $('#authEmail').value.trim();
+    const username = $('#authUsername').value.trim();
     const password = $('#authPassword').value;
+    if (username) localStorage.setItem('sayitlike_last_username', username);
 
     const credential = await firebaseAuth.signInWithEmailAndPassword(email, password);
     const idToken = await credential.user.getIdToken(true);
-    authUser = await fetchProfile(idToken);
+
+    // Important: if a username is typed in the login window, use it as the public name.
+    // Without this, existing Firebase accounts may fall back to the email prefix.
+    authUser = username
+      ? await saveProfile(idToken, username)
+      : await fetchProfile(idToken);
+
     renderAuthUI();
     socket.emit('auth:set', { idToken });
     showToast('Logged in.');
@@ -611,6 +620,9 @@ function initEvents() {
   $('#signupBtn').addEventListener('click', signup);
   $('#loginBtn').addEventListener('click', login);
   $('#logoutBtn').addEventListener('click', logout);
+  const lastUsername = localStorage.getItem('sayitlike_last_username');
+  if (lastUsername) $('#authUsername').value = lastUsername;
+
   $('#authPassword').addEventListener('keydown', (event) => {
     if (event.key === 'Enter') login();
   });
