@@ -92,6 +92,80 @@ function promptText(prompt) {
   return `Say "${line}" like ${scenario}.`;
 }
 
+function formatAudioTime(seconds) {
+  if (!Number.isFinite(seconds) || seconds < 0) return '0:00';
+  const mins = Math.floor(seconds / 60);
+  const secs = Math.floor(seconds % 60);
+  return `${mins}:${String(secs).padStart(2, '0')}`;
+}
+
+function pauseOtherAudioPlayers(activeAudio) {
+  document.querySelectorAll('.themed-audio audio').forEach((audio) => {
+    if (audio !== activeAudio) audio.pause();
+  });
+}
+
+function createThemedAudioPlayer(src) {
+  const wrap = document.createElement('div');
+  wrap.className = 'themed-audio';
+
+  const play = document.createElement('button');
+  play.type = 'button';
+  play.className = 'audio-play-btn';
+  play.textContent = '▶';
+  play.setAttribute('aria-label', 'Play audio');
+
+  const progress = document.createElement('input');
+  progress.type = 'range';
+  progress.min = '0';
+  progress.max = '1000';
+  progress.value = '0';
+  progress.className = 'audio-progress';
+  progress.setAttribute('aria-label', 'Audio progress');
+
+  const time = document.createElement('span');
+  time.className = 'audio-time';
+  time.textContent = '0:00';
+
+  const audio = document.createElement('audio');
+  audio.preload = 'metadata';
+  audio.src = src;
+
+  const updateProgress = () => {
+    const duration = Number.isFinite(audio.duration) ? audio.duration : 0;
+    if (duration > 0) progress.value = String(Math.round((audio.currentTime / duration) * 1000));
+    else progress.value = '0';
+    time.textContent = `${formatAudioTime(audio.currentTime)} / ${formatAudioTime(duration)}`;
+  };
+
+  play.addEventListener('click', async () => {
+    try {
+      if (audio.paused) {
+        pauseOtherAudioPlayers(audio);
+        await audio.play();
+      } else {
+        audio.pause();
+      }
+    } catch (err) {
+      showToast('Could not play audio.', true);
+    }
+  });
+
+  progress.addEventListener('input', () => {
+    const duration = Number.isFinite(audio.duration) ? audio.duration : 0;
+    if (duration > 0) audio.currentTime = (Number(progress.value) / 1000) * duration;
+  });
+
+  audio.addEventListener('play', () => { play.textContent = 'Ⅱ'; });
+  audio.addEventListener('pause', () => { play.textContent = '▶'; });
+  audio.addEventListener('ended', () => { play.textContent = '▶'; progress.value = '0'; });
+  audio.addEventListener('loadedmetadata', updateProgress);
+  audio.addEventListener('timeupdate', updateProgress);
+
+  wrap.append(play, progress, time, audio);
+  return wrap;
+}
+
 function myPlayer(room = currentRoom) {
   return room?.players?.find((player) => player.id === myId) || null;
 }
@@ -207,11 +281,15 @@ function renderAuthUI() {
     if (signedUsername) signedUsername.textContent = display;
     if (signedStats) signedStats.textContent = `${authUser.wins || 0} BUCKS • ${authUser.gamesPlayed || 0} GAMES`;
     if (accountWins) accountWins.textContent = `${authUser.wins || 0} B`;
+    const shopBucks = $('#shopBucks');
+    if (shopBucks) shopBucks.textContent = `${authUser.wins || 0} B`;
     if (accountLevel) accountLevel.textContent = String(Math.max(1, Math.floor((authUser.wins || 0) / 300) + 1));
   } else {
     if (playerName) { playerName.disabled = false; playerName.value = 'Guest'; }
     if (accountName) accountName.textContent = 'GUEST';
     if (accountWins) accountWins.textContent = '0 B';
+    const shopBucks = $('#shopBucks');
+    if (shopBucks) shopBucks.textContent = '0 B';
     if (accountLevel) accountLevel.textContent = '1';
   }
 }
@@ -309,8 +387,10 @@ function updateLobbyControls(room) {
   }
 
   if (!start) return;
-  start.hidden = !isHost || waiting;
-  if (!isHost || waiting) return;
+  const shouldShowStart = isHost && !waiting;
+  start.hidden = !shouldShowStart;
+  start.style.display = shouldShowStart ? '' : 'none';
+  if (!shouldShowStart) return;
 
   if (room?.status !== 'lobby') {
     start.disabled = true;
@@ -460,11 +540,20 @@ function injectAwardsScreens() {
     .award-winner{color:var(--muted);font-size:11px;text-transform:uppercase}.award-bucks{color:var(--green);font-size:13px;text-transform:uppercase;margin-top:6px}
     .prompt-vote-title{font-size:clamp(28px,4.8vw,56px);line-height:.95}
     #votingScreen .modal-title{font-size:clamp(30px,5vw,58px);line-height:.96}
-    .clip-card{background:#10091d;border:2px solid #3f1d70;border-radius:14px;padding:14px;margin:14px 0;box-shadow:0 0 0 1px rgba(124,58,237,.12)}
-    .clip-title{color:#fff4e4;margin-bottom:8px;letter-spacing:.5px}
-    .clip-card audio{display:block;width:100%;height:42px;margin:8px 0 10px;filter:drop-shadow(0 0 10px rgba(45,212,191,.12))}
-    .clip-card audio::-webkit-media-controls-panel{background:#fff4e4}
-    .clip-card .vote-btn{margin-top:4px}
+    .clip-card{background:#10091d;border:2px solid #3f1d70;border-radius:14px;padding:16px;margin:14px 0;box-shadow:0 0 0 1px rgba(124,58,237,.12)}
+    .clip-title{color:#fff4e4;margin-bottom:10px;letter-spacing:.5px}
+    .clip-card .vote-btn{margin-top:10px}
+    .themed-audio{display:grid;grid-template-columns:48px 1fr 118px;gap:12px;align-items:center;width:100%;padding:12px;background:#070a18;border:1px solid rgba(45,212,191,.25);box-shadow:inset 0 0 20px rgba(45,212,191,.05)}
+    .themed-audio audio{display:none}
+    .audio-play-btn{height:38px;width:42px;border:1px solid var(--green);background:#111827;color:#fff4e4;cursor:pointer;font-family:inherit;font-size:12px;box-shadow:0 0 12px rgba(45,212,191,.12)}
+    .audio-play-btn:hover{background:#172033;color:var(--green)}
+    .audio-progress{-webkit-appearance:none;appearance:none;width:100%;height:14px;background:#050816;border:1px solid rgba(139,92,246,.35);cursor:pointer}
+    .audio-progress::-webkit-slider-runnable-track{height:14px;background:linear-gradient(90deg,rgba(45,212,191,.92),rgba(139,92,246,.92));box-shadow:inset 0 0 0 1px rgba(255,255,255,.06)}
+    .audio-progress::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:16px;height:26px;margin-top:-6px;background:#fff4e4;border:2px solid var(--green);box-shadow:3px 3px 0 #050816}
+    .audio-progress::-moz-range-track{height:14px;background:linear-gradient(90deg,rgba(45,212,191,.92),rgba(139,92,246,.92));border:1px solid rgba(255,255,255,.06)}
+    .audio-progress::-moz-range-thumb{width:16px;height:26px;background:#fff4e4;border:2px solid var(--green);border-radius:0}
+    .audio-time{font-family:ui-monospace,monospace;font-size:12px;color:var(--muted);white-space:nowrap;text-align:right}
+    .shop-grid{display:grid;gap:16px}.shop-row{border:1px solid rgba(139,92,246,.22);background:rgba(7,10,24,.62);padding:16px}.shop-cards{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.shop-item{border:1px solid rgba(45,212,191,.24);background:#0a1020;padding:14px;min-height:96px}.shop-item strong{display:block;font-size:18px;color:#fff4e4;margin-bottom:9px}.shop-item small{display:block;color:var(--muted);font-size:8px}.shop-price{color:var(--green);font-size:11px;margin-top:10px}.shop-locked{margin-top:10px;border:1px solid rgba(255,255,255,.1);padding:8px;text-align:center;color:var(--muted);font-size:8px}
     @keyframes awardReveal{from{opacity:0;transform:translateY(28px) scale(.96)}to{opacity:1;transform:translateY(0) scale(1)}}
     @keyframes awardPulse{0%,100%{box-shadow:0 0 28px rgba(45,212,191,.25)}50%{box-shadow:0 0 52px rgba(45,212,191,.55)}}
     @keyframes awardShine{to{transform:translateX(130%)}}
@@ -651,9 +740,10 @@ function renderClipVoting(payload = currentPerformanceVotingPayload) {
     const isOwn = clip.clipId === payload.ownClipId;
     card.innerHTML = `
       <div class="clip-title">PERFORMANCE ${escapeHtml(clip.label)}${isOwn ? ' • YOURS' : ''}</div>
-      <audio controls src="${clip.audioData}"></audio>
+      <div class="themed-audio-slot"></div>
       <button class="pixel-btn vote-btn" ${isOwn ? 'disabled' : ''}>VOTE BEST PERFORMANCE</button>`;
-    card.querySelector('button')?.addEventListener('click', () => socket.emit('vote:submit', { clipId: clip.clipId }));
+    card.querySelector('.themed-audio-slot')?.appendChild(createThemedAudioPlayer(clip.audioData));
+    card.querySelector('.vote-btn')?.addEventListener('click', () => socket.emit('vote:submit', { clipId: clip.clipId }));
     list.appendChild(card);
   });
   const voted = $('#votedCount');
@@ -913,9 +1003,56 @@ function setupEvents() {
   });
 }
 
+
+function injectShopScreen() {
+  if ($('#shopScreen')) return;
+  const hallScreen = $('#hallScreen');
+  const shop = document.createElement('section');
+  shop.className = 'modal-wrap screen';
+  shop.id = 'shopScreen';
+  shop.innerHTML = `
+    <div class="modal small">
+      <button class="modal-close back-btn" data-screen="homeScreen">X</button>
+      <div class="modal-inner">
+        <h2 class="modal-title">SHOP</h2>
+        <div class="modal-kicker">VOICEBUCKS <span id="shopBucks">${authUser?.wins || 0} B</span></div>
+        <div class="shop-grid">
+          <div class="shop-row">
+            <h3>REVEAL ANIMATIONS</h3>
+            <div class="shop-cards">
+              <div class="shop-item"><strong>GLITCH</strong><small>COMING SOON</small><div class="shop-locked">LOCKED</div></div>
+              <div class="shop-item"><strong>OSCAR</strong><small>COMING SOON</small><div class="shop-locked">LOCKED</div></div>
+              <div class="shop-item"><strong>CHAOS</strong><small>COMING SOON</small><div class="shop-locked">LOCKED</div></div>
+            </div>
+          </div>
+          <div class="shop-row">
+            <h3>PROFILE THEMES</h3>
+            <div class="shop-cards">
+              <div class="shop-item"><strong>GHOST</strong><small>800 B</small><div class="shop-locked">NOT ENOUGH</div></div>
+              <div class="shop-item"><strong>ROYAL</strong><small>1500 B</small><div class="shop-locked">NOT ENOUGH</div></div>
+              <div class="shop-item"><strong>NEON</strong><small>2500 B</small><div class="shop-locked">NOT ENOUGH</div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  (hallScreen || document.querySelector('.game-frame'))?.before(shop);
+}
+
 function initCopy() {
+  injectShopScreen();
   const subtitle = $('.logo-subtitle');
   if (subtitle) subtitle.textContent = 'WRITE THE LINE • WRITE THE SCENARIO • WIN THE PERFORMANCE';
+  const mainHowButton = $('#homeScreen .menu-btn[data-screen="howScreen"]');
+  if (mainHowButton) {
+    mainHowButton.dataset.screen = 'shopScreen';
+    const strong = mainHowButton.querySelector('strong');
+    const small = mainHowButton.querySelector('small');
+    if (strong) strong.textContent = 'SHOP';
+    if (small) small.textContent = 'PROFILE THEMES + REWARDS';
+  }
+  const shopBucks = $('#shopBucks');
+  if (shopBucks) shopBucks.textContent = `${authUser?.wins || 0} B`;
   const how = $('#howScreen .modal-inner');
   if (how) {
     how.innerHTML = `
