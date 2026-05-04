@@ -23,27 +23,12 @@ window.SAYITLIKE_FIREBASE_CONFIG = {
     return String(value || "").trim();
   }
 
-  function usernameKey(username) {
-    return clean(username).toLowerCase();
-  }
-
   function looksLikeEmail(value) {
     return /@/.test(clean(value));
   }
 
   function validUsername(username) {
     return /^[a-zA-Z0-9_-]{3,16}$/.test(clean(username));
-  }
-
-  function cacheUsernameEmail(username, email) {
-    const key = usernameKey(username);
-    const value = clean(email).toLowerCase();
-    if (!key || !value) return;
-    localStorage.setItem(`sayitlike_username_email_${key}`, value);
-  }
-
-  function getCachedUsernameEmail(username) {
-    return localStorage.getItem(`sayitlike_username_email_${usernameKey(username)}`) || "";
   }
 
   function setBusy(button, busy, label) {
@@ -61,16 +46,6 @@ window.SAYITLIKE_FIREBASE_CONFIG = {
   function toast(message, isError = false) {
     if (typeof showToast === "function") showToast(message, isError);
     else alert(message);
-  }
-
-  async function emailFromIdentifier(identifier) {
-    const value = clean(identifier);
-    if (looksLikeEmail(value)) return value.toLowerCase();
-
-    const cached = getCachedUsernameEmail(value);
-    if (cached) return cached;
-
-    throw new Error("Username login needs the server-side resolver. For now, log in with your email.");
   }
 
   function showAuthMode(mode) {
@@ -112,7 +87,6 @@ window.SAYITLIKE_FIREBASE_CONFIG = {
         throw profileErr;
       }
 
-      cacheUsernameEmail(authUser.username, authUser.email || email);
       renderAuthUI();
       socket.emit("auth:set", { idToken });
       toast("Account created.");
@@ -129,18 +103,16 @@ window.SAYITLIKE_FIREBASE_CONFIG = {
     try {
       requireFirebaseClient();
 
-      const identifier = clean(qs("#authLoginIdentifier")?.value);
+      const email = clean(qs("#authLoginEmail")?.value).toLowerCase();
       const password = qs("#authLoginPassword")?.value || "";
-      if (!identifier) throw new Error("Enter your email or username.");
+      if (!looksLikeEmail(email)) throw new Error("Enter a valid email address.");
       if (!password) throw new Error("Enter your password.");
 
       setBusy(button, true, "LOGGING IN...");
-      const email = await emailFromIdentifier(identifier);
       const credential = await firebaseAuth.signInWithEmailAndPassword(email, password);
       const idToken = await credential.user.getIdToken(true);
       authUser = await fetchProfile(idToken);
 
-      cacheUsernameEmail(authUser.username, authUser.email || email);
       renderAuthUI();
       socket.emit("auth:set", { idToken });
       toast("Logged in.");
@@ -156,12 +128,11 @@ window.SAYITLIKE_FIREBASE_CONFIG = {
     const button = qs("#authForgotBtn");
     try {
       requireFirebaseClient();
-      const identifier = clean(qs("#authLoginIdentifier")?.value);
-      if (!identifier) throw new Error("Enter your email first.");
-      if (!looksLikeEmail(identifier)) throw new Error("Password reset currently needs your email address.");
+      const email = clean(qs("#authLoginEmail")?.value).toLowerCase();
+      if (!looksLikeEmail(email)) throw new Error("Enter your email first.");
 
       setBusy(button, true, "SENDING...");
-      await firebaseAuth.sendPasswordResetEmail(identifier.toLowerCase());
+      await firebaseAuth.sendPasswordResetEmail(email);
       toast("Password reset email sent.");
     } catch (err) {
       toast(err.message || "Could not send password reset email.", true);
@@ -204,8 +175,8 @@ window.SAYITLIKE_FIREBASE_CONFIG = {
       </div>
 
       <div id="authLoginForm" class="auth-form">
-        <label for="authLoginIdentifier">EMAIL OR USERNAME</label>
-        <input id="authLoginIdentifier" placeholder="email or username" autocomplete="username" />
+        <label for="authLoginEmail">EMAIL</label>
+        <input id="authLoginEmail" type="email" placeholder="you@example.com" autocomplete="email" />
 
         <label for="authLoginPassword">PASSWORD</label>
         <input id="authLoginPassword" type="password" maxlength="72" placeholder="password" autocomplete="current-password" />
@@ -214,7 +185,7 @@ window.SAYITLIKE_FIREBASE_CONFIG = {
           <button class="pixel-btn full" id="authLoginSubmit" type="button">LOGIN</button>
         </div>
         <button class="auth-link-btn" id="authForgotBtn" type="button">Forgot your password? Send reset email.</button>
-        <p class="tiny-note auth-help">Email login works now. Username login works on this device after one successful email login/signup, and needs a server resolver for full support.</p>
+        <p class="tiny-note auth-help">Login uses your email and password.</p>
       </div>
 
       <div id="authSignupForm" class="auth-form" hidden>
@@ -243,7 +214,7 @@ window.SAYITLIKE_FIREBASE_CONFIG = {
     qs("#authLoginPassword")?.addEventListener("keydown", (event) => {
       if (event.key === "Enter") upgradedLogin();
     });
-    qs("#authLoginIdentifier")?.addEventListener("keydown", (event) => {
+    qs("#authLoginEmail")?.addEventListener("keydown", (event) => {
       if (event.key === "Enter") upgradedLogin();
     });
     qs("#authSignupPassword")?.addEventListener("keydown", (event) => {
