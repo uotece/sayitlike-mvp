@@ -6,7 +6,7 @@ const path = require('path');
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
-  maxHttpBufferSize: 2e6, // enough for short webm audio clips
+  maxHttpBufferSize: 2e6,
   cors: { origin: '*' }
 });
 
@@ -15,6 +15,7 @@ const MAX_PLAYERS = 10;
 const RECORDING_SECONDS = 60;
 const VOTING_SECONDS = 45;
 const MAX_CLIP_BYTES = 1_400_000;
+const LEADERBOARD_LIMIT = 25;
 
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -54,11 +55,13 @@ const styles = [
   "like someone trying not to cry"
 ];
 
-/** @type {Map<string, any>} */
 const rooms = new Map();
-/** @type {Map<string, string>} socket.id -> roomCode */
 const socketRooms = new Map();
-let quickRoomCode = null;
+const playerStats = new Map(); // normalizedName -> {name,wins,gamesPlayed}
+
+function normalizeName(name) {
+  return String(name || 'Guest').trim().slice(0, 16).toLowerCase();
+}
 
 function makeRoomCode() {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -74,18 +77,32 @@ function makeRoom(code = makeRoomCode(), isQuick = false) {
     code,
     isQuick,
     hostId: null,
-    status: 'lobby', // lobby | recording | voting | results
+    status: 'lobby',
     prompt: null,
-    players: new Map(), // socket.id -> {id,name,connected,submitted,voted}
-    clips: new Map(), // clipId -> {clipId, playerId, audioData, mimeType, submittedAt}
-    votes: new Map(), // voterId -> clipId
+    players: new Map(),
+    clips: new Map(),
+    votes: new Map(),
     timers: { recording: null, voting: null },
     endsAt: null,
+    phaseStartedAt: null,
+    phaseDuration: null,
     clipCounter: 0,
     round: 0
   };
   rooms.set(code, room);
   return room;
+}
+
+function randomPrompt() {
+  return {
+    line: lines[Math.floor(Math.random() * lines.length)],
+    style: styles[Math.floor(Math.random() * styles.length)]
+  };
+}
+
+function clipLetter(index) {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+  return alphabet[index] || String(index + 1);
 }
 
 function publicPlayers(room) {
@@ -99,8 +116,8 @@ function publicPlayers(room) {
   }));
 }
 
-function emitRoom(room) {
-  io.to(room.code).emit('room:update', {
+function roomPayload(room) {
+  return {
     code: room.code,
     isQuick: room.isQuick,
     hostId: room.hostId,
@@ -110,17 +127,71 @@ function emitRoom(room) {
     round: room.round,
     maxPlayers: MAX_PLAYERS,
     endsAt: room.endsAt,
+    phaseStartedAt: room.phaseStartedAt,
+    phaseDuration: room.phaseDuration,
     submittedCount: [...room.players.values()].filter((p) => p.submitted).length,
     totalPlayers: room.players.size,
     votedCount: room.votes.size
-  });
+  };
+}
+
+function emitRoom(room) {
+  io.to(room.code).emit('room:update', roomPayload(room));
+}
+
+function quickRoomsPayload() {
+  return [...rooms.values()]
+    .filter((room) => room.isQuick && room.status === 'lobby')
+    .sort((a, b) => b.players.size - a.players.size || a.code.localeCompare(b.code))
+    .map((room) => ({
+      code: room.code,
+      hostName: room.players.get(room.hostId)?.name || 'Guest',
+      playersCount: room.players.size,
+      maxPlayers: MAX_PLAYERS,
+      status: room.status,
+      round: room.round
+    }));
+}
+
+function emitQuickRooms(target = io) {
+  target.emit('quick:list', quickRoomsPayload());
+}
+
+function leaderboardPayload() {
+  return [...playerStats.values()]
+    .sort((a, b) => b.wins - a.wins || (b.gamesPlayed ? b.wins / b.gamesPlayed : 0) - (a.gamesPlayed ? a.wins / a.gamesPlayed : 0) || a.name.localeCompare(b.name))
+    .slice(0, LEADERBOARD_LIMIT)
+    .map((entry, index) => ({
+      rank: index + 1,
+      name: entry.name,
+      wins: entry.wins,
+      gamesPlayed: entry.gamesPlayed,
+      winRate: entry.gamesPlayed ? Math.round((entry.wins / entry.gamesPlayed) * 100) : 0
+    }));
+}
+
+function emitLeaderboard(target = io) {
+  target.emit('leaderboard:update', leaderboardPayload());
 }
 
 function cleanupRoom(room) {
   clearTimeout(room.timers.recording);
   clearTimeout(room.timers.voting);
   rooms.delete(room.code);
-  if (quickRoomCode === room.code) quickRoomCode = null;
+  emitQuickRooms();
+}
+
+function maybeEndRecording(room) {
+  if (room.status !== 'recording') return;
+  const activePlayers = [...room.players.values()];
+  const submitted = activePlayers.filter((p) => p.submitted).length;
+  if (submitted >= activePlayers.length) endRecording(room);
+}
+
+function maybeEndVoting(room) {
+  if (room.status !== 'voting') return;
+  const possibleVoters = [...room.players.values()].filter((p) => room.clips.size > 1 || ![...room.clips.values()].some((c) => c.playerId === p.id));
+  if (room.votes.size >= possibleVoters.length) endVoting(room);
 }
 
 function leaveCurrentRoom(socket) {
@@ -129,12 +200,11 @@ function leaveCurrentRoom(socket) {
   const room = rooms.get(code);
   socketRooms.delete(socket.id);
   socket.leave(code);
-
   if (!room) return;
+
   room.players.delete(socket.id);
   room.votes.delete(socket.id);
 
-  // Remove the player's clip if still in active round.
   for (const [clipId, clip] of room.clips.entries()) {
     if (clip.playerId === socket.id) {
       room.clips.delete(clipId);
@@ -156,26 +226,21 @@ function leaveCurrentRoom(socket) {
   if (room.status === 'recording') maybeEndRecording(room);
   if (room.status === 'voting') maybeEndVoting(room);
   emitRoom(room);
-}
-
-function randomPrompt() {
-  return {
-    line: lines[Math.floor(Math.random() * lines.length)],
-    style: styles[Math.floor(Math.random() * styles.length)]
-  };
+  emitQuickRooms();
 }
 
 function startRound(room) {
   clearTimeout(room.timers.recording);
   clearTimeout(room.timers.voting);
-
   room.status = 'recording';
   room.prompt = randomPrompt();
   room.clips.clear();
   room.votes.clear();
   room.clipCounter = 0;
   room.round += 1;
-  room.endsAt = Date.now() + RECORDING_SECONDS * 1000;
+  room.phaseStartedAt = Date.now();
+  room.phaseDuration = RECORDING_SECONDS;
+  room.endsAt = room.phaseStartedAt + RECORDING_SECONDS * 1000;
 
   for (const player of room.players.values()) {
     player.submitted = false;
@@ -184,18 +249,7 @@ function startRound(room) {
 
   room.timers.recording = setTimeout(() => endRecording(room), RECORDING_SECONDS * 1000);
   emitRoom(room);
-}
-
-function clipLetter(index) {
-  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
-  return alphabet[index] || String(index + 1);
-}
-
-function maybeEndRecording(room) {
-  if (room.status !== 'recording') return;
-  const activePlayers = [...room.players.values()];
-  const submitted = activePlayers.filter((p) => p.submitted).length;
-  if (submitted >= activePlayers.length) endRecording(room);
+  emitQuickRooms();
 }
 
 function endRecording(room) {
@@ -205,13 +259,18 @@ function endRecording(room) {
   if (room.clips.size === 0) {
     room.status = 'lobby';
     room.endsAt = null;
+    room.phaseStartedAt = null;
+    room.phaseDuration = null;
     io.to(room.code).emit('game:notice', 'Nobody submitted a clip. Round cancelled.');
     emitRoom(room);
+    emitQuickRooms();
     return;
   }
 
   room.status = 'voting';
-  room.endsAt = Date.now() + VOTING_SECONDS * 1000;
+  room.phaseStartedAt = Date.now();
+  room.phaseDuration = VOTING_SECONDS;
+  room.endsAt = room.phaseStartedAt + VOTING_SECONDS * 1000;
   room.timers.voting = setTimeout(() => endVoting(room), VOTING_SECONDS * 1000);
 
   const clips = [...room.clips.values()].map((clip, index) => ({
@@ -227,17 +286,13 @@ function endRecording(room) {
       clips,
       ownClipId: ownClip ? ownClip.clipId : null,
       prompt: room.prompt,
-      endsAt: room.endsAt
+      endsAt: room.endsAt,
+      phaseStartedAt: room.phaseStartedAt,
+      phaseDuration: room.phaseDuration
     });
   }
   emitRoom(room);
   maybeEndVoting(room);
-}
-
-function maybeEndVoting(room) {
-  if (room.status !== 'voting') return;
-  const possibleVoters = [...room.players.values()].filter((p) => room.clips.size > 1 || ![...room.clips.values()].some((c) => c.playerId === p.id));
-  if (room.votes.size >= possibleVoters.length) endVoting(room);
 }
 
 function endVoting(room) {
@@ -245,6 +300,8 @@ function endVoting(room) {
   clearTimeout(room.timers.voting);
   room.status = 'results';
   room.endsAt = null;
+  room.phaseStartedAt = null;
+  room.phaseDuration = null;
 
   const tally = new Map();
   for (const clip of room.clips.values()) tally.set(clip.clipId, 0);
@@ -264,7 +321,24 @@ function endVoting(room) {
   });
 
   const maxVotes = clips.reduce((max, c) => Math.max(max, c.votes), 0);
-  const winners = clips.filter((c) => c.votes === maxVotes && maxVotes >= 0);
+  const winners = clips.filter((c) => c.votes === maxVotes && clips.length && maxVotes >= 0);
+
+  // update leaderboard stats by player name
+  const participants = new Map();
+  for (const clip of clips) participants.set(normalizeName(clip.playerName), clip.playerName);
+  for (const [norm, display] of participants.entries()) {
+    const current = playerStats.get(norm) || { name: display, wins: 0, gamesPlayed: 0 };
+    current.name = display;
+    current.gamesPlayed += 1;
+    playerStats.set(norm, current);
+  }
+  for (const winner of winners) {
+    const norm = normalizeName(winner.playerName);
+    const current = playerStats.get(norm) || { name: winner.playerName, wins: 0, gamesPlayed: 0 };
+    current.name = winner.playerName;
+    current.wins += 1;
+    playerStats.set(norm, current);
+  }
 
   io.to(room.code).emit('round:results', {
     prompt: room.prompt,
@@ -273,6 +347,8 @@ function endVoting(room) {
     totalVotes: room.votes.size
   });
   emitRoom(room);
+  emitLeaderboard();
+  emitQuickRooms();
 }
 
 function joinRoom(socket, room, name) {
@@ -295,20 +371,33 @@ function joinRoom(socket, room, name) {
   socket.emit('room:joined', {
     code: room.code,
     playerId: socket.id,
-    isHost: room.hostId === socket.id
+    isHost: room.hostId === socket.id,
+    isQuick: room.isQuick
   });
   emitRoom(room);
+  emitQuickRooms();
   return true;
 }
 
 io.on('connection', (socket) => {
   socket.emit('app:hello', { playerId: socket.id, maxPlayers: MAX_PLAYERS });
+  emitQuickRooms(socket);
+  emitLeaderboard(socket);
 
-  socket.on('quick:join', ({ name } = {}) => {
-    let room = quickRoomCode ? rooms.get(quickRoomCode) : null;
-    if (!room || room.players.size >= MAX_PLAYERS || room.status !== 'lobby') {
-      room = makeRoom(undefined, true);
-      quickRoomCode = room.code;
+  socket.on('quick:list', () => emitQuickRooms(socket));
+  socket.on('leaderboard:get', () => emitLeaderboard(socket));
+
+  socket.on('quick:create', ({ name } = {}) => {
+    const room = makeRoom(undefined, true);
+    joinRoom(socket, room, name);
+  });
+
+  socket.on('quick:join', ({ name, code } = {}) => {
+    const normalizedCode = String(code || '').trim().toUpperCase();
+    const room = rooms.get(normalizedCode);
+    if (!room || !room.isQuick) {
+      socket.emit('app:error', 'Quick room not found.');
+      return;
     }
     joinRoom(socket, room, name);
   });
@@ -321,7 +410,7 @@ io.on('connection', (socket) => {
   socket.on('custom:join', ({ name, code } = {}) => {
     const normalizedCode = String(code || '').trim().toUpperCase();
     const room = rooms.get(normalizedCode);
-    if (!room) {
+    if (!room || room.isQuick) {
       socket.emit('app:error', 'Room not found.');
       return;
     }
@@ -357,13 +446,11 @@ io.on('connection', (socket) => {
       socket.emit('app:error', 'Invalid audio clip.');
       return;
     }
-    // quick approximate base64 length guard
     if (Buffer.byteLength(data, 'utf8') > MAX_CLIP_BYTES) {
       socket.emit('app:error', 'Audio clip is too large. Keep it under 10 seconds.');
       return;
     }
 
-    // Replace previous clip if player re-submits before time ends.
     for (const [clipId, clip] of room.clips.entries()) {
       if (clip.playerId === socket.id) room.clips.delete(clipId);
     }
@@ -408,5 +495,5 @@ io.on('connection', (socket) => {
 });
 
 server.listen(PORT, () => {
-  console.log(`SayItLike running on port ${PORT}`);
+  console.log(`SayItLike MVP running on http://localhost:${PORT}`);
 });

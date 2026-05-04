@@ -43,8 +43,23 @@
 
       <section class="center-stack screen active" id="homeScreen">
         <div class="logo-symbol" aria-hidden="true">
-          <svg viewBox="0 0 80 86">
-            <rect x="31" y="8" width="18" height="8" fill="#f8fafc"/><rect x="27" y="16" width="26" height="8" fill="#8b5cf6"/><rect x="23" y="24" width="34" height="30" fill="#7c3aed"/><rect x="29" y="30" width="22" height="18" fill="#4c1d95"/><rect x="34" y="34" width="12" height="10" fill="#f8fafc"/><rect x="18" y="34" width="5" height="10" fill="#f8fafc"/><rect x="57" y="34" width="5" height="10" fill="#f8fafc"/><rect x="36" y="54" width="8" height="14" fill="#f8fafc"/><rect x="26" y="68" width="28" height="6" fill="#f8fafc"/><rect x="20" y="74" width="40" height="6" fill="#8b5cf6"/><rect x="54" y="16" width="6" height="6" fill="#f8fafc"/><rect x="18" y="16" width="5" height="6" fill="#2dd4bf"/>
+          <svg viewBox="0 0 80 88" xmlns="http://www.w3.org/2000/svg">
+            <rect x="28" y="4" width="24" height="8" fill="#fff4e4"/>
+            <rect x="20" y="12" width="40" height="8" fill="#24113f"/>
+            <rect x="20" y="20" width="40" height="8" fill="#7c3aed"/>
+            <rect x="20" y="28" width="40" height="8" fill="#7c3aed"/>
+            <rect x="20" y="36" width="40" height="8" fill="#5b21b6"/>
+            <rect x="28" y="44" width="24" height="8" fill="#32145f"/>
+            <rect x="28" y="16" width="8" height="24" fill="#a78bfa"/>
+            <rect x="44" y="16" width="8" height="24" fill="#4c1d95"/>
+            <rect x="28" y="24" width="24" height="4" fill="#fff4e4" opacity=".9"/>
+            <rect x="28" y="34" width="24" height="4" fill="#fff4e4" opacity=".72"/>
+            <rect x="12" y="32" width="8" height="20" fill="#fff4e4"/>
+            <rect x="60" y="32" width="8" height="20" fill="#fff4e4"/>
+            <rect x="20" y="52" width="40" height="8" fill="#fff4e4"/>
+            <rect x="36" y="60" width="8" height="14" fill="#fff4e4"/>
+            <rect x="28" y="74" width="24" height="8" fill="#fff4e4"/>
+            <rect x="20" y="82" width="40" height="6" fill="#7c3aed"/>
           </svg>
         </div>
         <h1 class="logo-title">SAY IT LIKE</h1>
@@ -63,9 +78,43 @@
           <input id="playerName" maxlength="16" placeholder="Guest" autocomplete="off" />
         </div>
         <div class="menu-panel">
-          <button class="menu-btn active" id="quickBattleBtn"><strong>QUICK BATTLE</strong><small>MATCHMAKE INSTANTLY</small></button>
+          <button class="menu-btn active" data-screen="quickScreen" id="quickBattleMenuBtn"><strong>QUICK BATTLE</strong><small>JOIN ACTIVE ROOMS OR CREATE ONE</small></button>
           <button class="menu-btn" data-screen="customScreen"><strong>CUSTOM MODE</strong><small>CREATE OR JOIN BY CODE</small></button>
           <button class="menu-btn back-btn" data-screen="homeScreen"><strong>BACK</strong><small>RETURN TO MAIN MENU</small></button>
+        </div>
+      </section>
+
+      <section class="center-stack screen" id="quickScreen">
+        <div class="browser-panel">
+          <div class="browser-header">
+            <h2>ACTIVE ROOMS</h2>
+            <div class="browser-tabs">
+              <button class="browser-tab active" data-quick-tab="rooms">ROOMS</button>
+              <button class="browser-tab" data-quick-tab="create">CREATE ROOM</button>
+            </div>
+          </div>
+
+          <div class="quick-pane active" id="quickRoomsPane">
+            <div class="join-row quick-join-row">
+              <input id="quickRoomCodeInput" maxlength="5" placeholder="ENTER ROOM CODE" autocomplete="off" />
+              <button class="pixel-btn" id="joinQuickRoomBtn">JOIN</button>
+            </div>
+            <div class="rooms-meta">
+              <span>ACTIVE ROOMS</span>
+              <button class="linkish" id="refreshQuickRoomsBtn">↻ REFRESH</button>
+            </div>
+            <div id="quickRoomsList" class="rooms-list"></div>
+          </div>
+
+          <div class="quick-pane" id="quickCreatePane">
+            <div class="create-room-box">
+              <p class="tiny-note">Create a public quick room. Other players will see it in the active rooms list and can join instantly.</p>
+              <button class="pixel-btn" id="createQuickRoomBtn">CREATE QUICK ROOM</button>
+            </div>
+          </div>
+        </div>
+        <div class="menu-panel slim">
+          <button class="menu-btn back-btn" data-screen="playScreen"><strong>BACK</strong><small>RETURN TO PLAY MENU</small></button>
         </div>
       </section>
 
@@ -181,14 +230,10 @@
           <button class="modal-close back-btn" data-screen="homeScreen">X</button>
           <div class="modal-inner">
             <h2 class="modal-title">HALL OF VOICES</h2>
-            <div class="modal-kicker">STATIC MOCKUP FOR NOW</div>
+            <div class="modal-kicker">LIVE TOP PLAYERS FROM THIS SERVER</div>
             <table class="table">
               <thead><tr><th>RANK</th><th>PLAYER</th><th>WINS</th><th>WIN RATE</th></tr></thead>
-              <tbody>
-                <tr><td class="rank gold">1</td><td class="player">GUEST_</td><td class="score">12</td><td>58%</td></tr>
-                <tr><td class="rank silver">2</td><td class="player">VOICEGOBLIN</td><td class="score">9</td><td>46%</td></tr>
-                <tr><td class="rank bronze">3</td><td class="player">DRAMA_KING</td><td class="score">7</td><td>42%</td></tr>
-              </tbody>
+              <tbody id="leaderboardBody"></tbody>
             </table>
           </div>
         </div>
@@ -219,7 +264,7 @@
           <a href="#">DISCORD</a>
           <a href="#" data-screen="donateScreen">DONATE</a>
         </nav>
-        <div class="status">ACTIVE PLAYERS: <span id="activePlayers">000</span> <span class="dot"></span> V 0.2.0 <span class="dot red"></span></div>
+        <div class="status">ACTIVE PLAYERS: <span id="activePlayers">000</span> <span class="dot"></span> V 0.2.1 <span class="dot red"></span></div>
       </footer>
     </main>
   </div>

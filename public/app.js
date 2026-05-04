@@ -15,10 +15,13 @@ let tickTimer = null;
 let soundEnabled = true;
 let uiVolume = Number(localStorage.getItem('sayitlike_volume') || 70);
 let audioCtx = null;
+let quickRooms = [];
+let leaderboard = [];
 
 const screens = {
   home: $('#homeScreen'),
   play: $('#playScreen'),
+  quick: $('#quickScreen'),
   custom: $('#customScreen'),
   lobby: $('#lobbyScreen'),
   record: $('#recordScreen'),
@@ -77,6 +80,8 @@ function showScreen(screenId) {
   $$('.screen').forEach((el) => el.classList.remove('active'));
   const target = document.getElementById(screenId);
   target.classList.add('active');
+  if (screenId === 'quickScreen') socket.emit('quick:list');
+  if (screenId === 'hallScreen') socket.emit('leaderboard:get');
 }
 
 function getName() {
@@ -104,19 +109,21 @@ function copyText(value) {
     .catch(() => showToast('Could not copy. Copy manually.', true));
 }
 
-function updateTimer(endTime, elementId) {
+function updateTimer(startedAt, durationSeconds, elementId) {
   clearInterval(tickTimer);
   const el = document.getElementById(elementId);
-  if (!endTime || !el) return;
+  if (!startedAt || !durationSeconds || !el) return;
   const tick = () => {
-    const remaining = Math.max(0, Math.ceil((endTime - Date.now()) / 1000));
+    const elapsed = Math.floor((Date.now() - startedAt) / 1000);
+    const remaining = Math.max(0, durationSeconds - elapsed);
     el.textContent = String(remaining).padStart(2, '0');
+    if (remaining <= 0) clearInterval(tickTimer);
   };
   tick();
   tickTimer = setInterval(tick, 250);
 }
 
-function renderPlayers(players = [], hostId = null) {
+function renderPlayers(players = []) {
   const playersList = $('#playersList');
   playersList.innerHTML = '';
   players.forEach((player) => {
@@ -138,13 +145,61 @@ function escapeHtml(str) {
   }[ch]));
 }
 
+function renderQuickRooms(list = quickRooms) {
+  quickRooms = list;
+  const wrap = $('#quickRoomsList');
+  wrap.innerHTML = '';
+  if (!list.length) {
+    wrap.innerHTML = '<div class="empty-state">NO ACTIVE QUICK ROOMS RIGHT NOW.</div>';
+    return;
+  }
+  list.forEach((room) => {
+    const card = document.createElement('button');
+    card.className = 'room-card';
+    card.type = 'button';
+    card.dataset.code = room.code;
+    card.innerHTML = `
+      <div>
+        <div class="room-host">${escapeHtml(room.hostName)}</div>
+        <div class="room-sub">${room.playersCount}/${room.maxPlayers} PLAYERS</div>
+      </div>
+      <div class="room-right">
+        <span class="room-code">${room.code}</span>
+        <small>QUICK</small>
+      </div>
+    `;
+    wrap.appendChild(card);
+  });
+}
+
+function renderLeaderboard(list = leaderboard) {
+  leaderboard = list;
+  const body = $('#leaderboardBody');
+  body.innerHTML = '';
+  if (!list.length) {
+    body.innerHTML = '<tr><td colspan="4" class="tiny-note">No results yet. Play a round and the leaderboard will populate.</td></tr>';
+    return;
+  }
+  list.forEach((entry) => {
+    const rankClass = entry.rank === 1 ? 'gold' : entry.rank === 2 ? 'silver' : entry.rank === 3 ? 'bronze' : '';
+    const row = document.createElement('tr');
+    row.innerHTML = `
+      <td class="rank ${rankClass}">${entry.rank}</td>
+      <td class="player">${escapeHtml(entry.name)}</td>
+      <td class="score">${entry.wins}</td>
+      <td>${entry.winRate}%</td>
+    `;
+    body.appendChild(row);
+  });
+}
+
 function renderRoom(room) {
   currentRoom = room;
   $('#activePlayers').textContent = String(room.totalPlayers || room.players?.length || 0).padStart(3, '0');
   $('#roomCodeDisplay').textContent = room.code || '-----';
   $('#lobbyMode').textContent = room.isQuick ? 'QUICK BATTLE' : 'CUSTOM';
   $('#roomLink').value = `${window.location.origin}/?room=${room.code}`;
-  renderPlayers(room.players, room.hostId);
+  renderPlayers(room.players);
   $('#submittedCount').textContent = room.submittedCount || 0;
   $('#totalPlayers').textContent = room.totalPlayers || room.players?.length || 0;
   $('#votedCount').textContent = room.votedCount || 0;
@@ -157,9 +212,12 @@ function renderRoom(room) {
   if (room.status === 'recording') {
     $('#roundLine').textContent = room.prompt?.line || '—';
     $('#roundStyle').textContent = room.prompt?.style || '—';
-    updateTimer(room.endsAt, 'recordTimer');
+    updateTimer(room.phaseStartedAt, room.phaseDuration, 'recordTimer');
     resetRecorderUI(false);
     showScreen('recordScreen');
+  }
+  if (room.status === 'voting') {
+    updateTimer(room.phaseStartedAt, room.phaseDuration, 'voteTimer');
   }
   if (room.status === 'results') showScreen('resultsScreen');
 }
@@ -224,9 +282,7 @@ async function startRecording() {
 }
 
 function stopRecording() {
-  if (mediaRecorder && mediaRecorder.state !== 'inactive') {
-    mediaRecorder.stop();
-  }
+  if (mediaRecorder && mediaRecorder.state !== 'inactive') mediaRecorder.stop();
 }
 
 function blobToDataURL(blob) {
@@ -253,7 +309,7 @@ function renderVoting(payload) {
   currentVotingPayload = payload;
   $('#voteLine').textContent = payload.prompt?.line || '—';
   $('#voteStyle').textContent = payload.prompt?.style || '—';
-  updateTimer(payload.endsAt, 'voteTimer');
+  updateTimer(payload.phaseStartedAt, payload.phaseDuration, 'voteTimer');
 
   const clipList = $('#clipList');
   clipList.innerHTML = '';
@@ -285,22 +341,19 @@ function renderResults(payload) {
   const list = $('#resultsList');
   list.innerHTML = '';
 
-  payload.clips
-    .slice()
-    .sort((a, b) => b.votes - a.votes)
-    .forEach((clip) => {
-      const row = document.createElement('div');
-      row.className = `result-row ${winnerIds.has(clip.clipId) ? 'winner' : ''}`;
-      row.innerHTML = `
-        <div class="clip-id">CLIP ${clip.label}</div>
-        <div>
-          <div class="player">${escapeHtml(clip.playerName)}</div>
-          <audio controls src="${clip.audioData}"></audio>
-        </div>
-        <div class="score">${clip.votes} VOTE${clip.votes === 1 ? '' : 'S'}</div>
-      `;
-      list.appendChild(row);
-    });
+  payload.clips.slice().sort((a, b) => b.votes - a.votes).forEach((clip) => {
+    const row = document.createElement('div');
+    row.className = `result-row ${winnerIds.has(clip.clipId) ? 'winner' : ''}`;
+    row.innerHTML = `
+      <div class="clip-id">CLIP ${clip.label}</div>
+      <div>
+        <div class="player">${escapeHtml(clip.playerName)}</div>
+        <audio controls src="${clip.audioData}"></audio>
+      </div>
+      <div class="score">${clip.votes} VOTE${clip.votes === 1 ? '' : 'S'}</div>
+    `;
+    list.appendChild(row);
+  });
   winSound();
   showScreen('resultsScreen');
 }
@@ -309,12 +362,21 @@ function leaveRoom() {
   softSound();
   socket.emit('room:leave');
   currentRoom = null;
+  clearInterval(tickTimer);
   showScreen('playScreen');
+}
+
+function setQuickTab(tab) {
+  $$('.browser-tab').forEach((btn) => btn.classList.toggle('active', btn.dataset.quickTab === tab));
+  $('#quickRoomsPane').classList.toggle('active', tab === 'rooms');
+  $('#quickCreatePane').classList.toggle('active', tab === 'create');
 }
 
 function initEvents() {
   setNameFromStorage();
   setVolumeUI();
+  renderQuickRooms([]);
+  renderLeaderboard([]);
 
   $('#playerName').addEventListener('input', getName);
 
@@ -322,7 +384,7 @@ function initEvents() {
     const clicky = event.target.closest('button, a');
     if (!clicky) return;
     if (clicky.classList.contains('back-btn') || clicky.classList.contains('modal-close')) softSound();
-    else if (clicky.classList.contains('menu-btn')) menuSound();
+    else if (clicky.classList.contains('menu-btn') || clicky.classList.contains('browser-tab') || clicky.classList.contains('room-card')) menuSound();
     else if (clicky.classList.contains('pixel-btn') || clicky.classList.contains('vote-btn')) actionSound();
   });
 
@@ -350,19 +412,28 @@ function initEvents() {
   });
   $('#volumeSlider').addEventListener('change', () => beep(740, 0.055, 0.7));
 
-  $('#quickBattleBtn').addEventListener('click', () => {
-    socket.emit('quick:join', { name: getName() });
+  $('#quickBattleMenuBtn').addEventListener('click', () => {
+    setQuickTab('rooms');
+    socket.emit('quick:list');
   });
-  $('#createRoomBtn').addEventListener('click', () => {
-    socket.emit('custom:create', { name: getName() });
+  $$('.browser-tab').forEach((btn) => btn.addEventListener('click', () => setQuickTab(btn.dataset.quickTab)));
+  $('#refreshQuickRoomsBtn').addEventListener('click', () => socket.emit('quick:list'));
+  $('#createQuickRoomBtn').addEventListener('click', () => socket.emit('quick:create', { name: getName() }));
+  $('#joinQuickRoomBtn').addEventListener('click', () => {
+    socket.emit('quick:join', { name: getName(), code: $('#quickRoomCodeInput').value });
   });
-  $('#joinRoomBtn').addEventListener('click', () => {
-    socket.emit('custom:join', { name: getName(), code: $('#roomCodeInput').value });
+  $('#quickRoomCodeInput').addEventListener('input', (e) => { e.target.value = e.target.value.toUpperCase(); });
+  $('#quickRoomCodeInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('#joinQuickRoomBtn').click(); });
+  $('#quickRoomsList').addEventListener('click', (e) => {
+    const card = e.target.closest('.room-card');
+    if (!card) return;
+    socket.emit('quick:join', { name: getName(), code: card.dataset.code });
   });
+
+  $('#createRoomBtn').addEventListener('click', () => socket.emit('custom:create', { name: getName() }));
+  $('#joinRoomBtn').addEventListener('click', () => socket.emit('custom:join', { name: getName(), code: $('#roomCodeInput').value }));
   $('#roomCodeInput').addEventListener('input', (e) => { e.target.value = e.target.value.toUpperCase(); });
-  $('#roomCodeInput').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') $('#joinRoomBtn').click();
-  });
+  $('#roomCodeInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('#joinRoomBtn').click(); });
 
   $('#startRoundBtn').addEventListener('click', () => socket.emit('round:start'));
   $('#playAgainBtn').addEventListener('click', () => socket.emit('round:start'));
@@ -392,6 +463,8 @@ function initEvents() {
 socket.on('app:hello', (payload) => { myId = payload.playerId; });
 socket.on('app:error', (message) => showToast(message, true));
 socket.on('game:notice', (message) => showToast(message));
+socket.on('quick:list', renderQuickRooms);
+socket.on('leaderboard:update', renderLeaderboard);
 socket.on('room:joined', (payload) => {
   currentRoom = { ...(currentRoom || {}), code: payload.code };
   showToast(`Joined room ${payload.code}.`);
