@@ -282,7 +282,7 @@ function showPhaseIntro(key, title, text) {
   if (textEl) textEl.textContent = text;
   overlay.hidden = false;
   clearTimeout(showPhaseIntro.timer);
-  showPhaseIntro.timer = setTimeout(() => { overlay.hidden = true; }, 2100);
+  showPhaseIntro.timer = setTimeout(() => { overlay.hidden = true; }, 5600);
 }
 
 function updateLobbyControls(room) {
@@ -582,7 +582,10 @@ function renderRoom(room) {
   if ($('#roomCodeDisplay')) $('#roomCodeDisplay').textContent = room.code || '-----';
   if ($('#lobbyMode')) $('#lobbyMode').textContent = room.isQuick ? 'QUICK' : 'CUSTOM';
   if ($('#activePlayers')) $('#activePlayers').textContent = String(room.totalPlayers || room.players?.length || 0).padStart(3, '0');
-  if ($('#roomLink')) $('#roomLink').value = `${location.origin}${location.pathname}?room=${room.code}`;
+  if ($('#roomLink')) {
+    const mode = room.isQuick ? 'quick' : 'custom';
+    $('#roomLink').value = `${location.origin}${location.pathname}?room=${room.code}&mode=${mode}`;
+  }
   renderPlayers(room.players || []);
   updateLobbyControls(room);
 
@@ -796,9 +799,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const params = new URLSearchParams(location.search);
   const roomCode = params.get('room');
+  const roomMode = (params.get('mode') || '').toLowerCase();
   if (roomCode) {
-    const input = $('#roomCodeInput');
-    if (input) input.value = roomCode.toUpperCase().slice(0, 5);
-    showScreen('customScreen');
+    const code = roomCode.toUpperCase().slice(0, 5);
+    const customInput = $('#roomCodeInput');
+    const quickInput = $('#quickRoomCodeInput');
+    if (customInput) customInput.value = code;
+    if (quickInput) quickInput.value = code;
+    showScreen(roomMode === 'quick' ? 'quickScreen' : 'customScreen');
   }
 });

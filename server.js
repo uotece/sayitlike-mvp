@@ -763,8 +763,8 @@ io.on('connection', (socket) => {
   socket.on('quick:join', ({ name, code } = {}) => {
     const normalizedCode = String(code || '').trim().toUpperCase();
     const room = rooms.get(normalizedCode);
-    if (!room || !room.isQuick) {
-      socket.emit('app:error', 'Quick room not found.');
+    if (!room) {
+      socket.emit('app:error', 'Room not found.');
       return;
     }
     joinRoom(socket, room, name);
@@ -775,7 +775,7 @@ io.on('connection', (socket) => {
   socket.on('custom:join', ({ name, code } = {}) => {
     const normalizedCode = String(code || '').trim().toUpperCase();
     const room = rooms.get(normalizedCode);
-    if (!room || room.isQuick) {
+    if (!room) {
       socket.emit('app:error', 'Room not found.');
       return;
     }
