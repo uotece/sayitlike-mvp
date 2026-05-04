@@ -81,3 +81,8 @@ a{color:inherit;text-decoration:none}button,input{font-family:inherit}button{use
 .auth-form input[type="email"]{
   text-transform:none;
 }
+
+
+/* v0.4.1: the play menu no longer asks for a manual name.
+   Firebase account username controls the public name. */
+.player-name-box{display:none}

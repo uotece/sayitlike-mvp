@@ -87,18 +87,23 @@ function showScreen(screenId) {
   if (screenId === 'hallScreen') socket.emit('leaderboard:get');
 }
 
+function requireLoginToPlay() {
+  if (authUser?.username) return true;
+  showScreen('accountScreen');
+  showToast('Create an account or log in before playing.');
+  return false;
+}
+
 function getName() {
   if (authUser?.username) {
     $('#playerName').value = authUser.username;
-    $('#accountName').textContent = authUser.username.toUpperCase().replace(/\s+/g, '_') + '_';
+    $('#accountName').textContent = authUser.username.toUpperCase().replace(/\s+/g, '_');
     return authUser.username;
   }
 
-  const nameInput = $('#playerName');
-  const clean = String(nameInput.value || '').trim().slice(0, 16) || 'Guest';
-  localStorage.setItem('sayitlike_name', clean);
-  $('#accountName').textContent = clean.toUpperCase().replace(/\s+/g, '_') + '_';
-  return clean;
+  $('#playerName').value = 'Guest';
+  $('#accountName').textContent = 'GUEST';
+  return 'Guest';
 }
 
 function setNameFromStorage() {
@@ -190,7 +195,7 @@ function renderAuthUI() {
   $('#authUserPanel').hidden = !isSignedIn;
 
   if (isSignedIn) {
-    const display = authUser.username.toUpperCase().replace(/\s+/g, '_') + '_';
+    const display = authUser.username.toUpperCase().replace(/\s+/g, '_');
     $('#accountName').textContent = display;
     $('#playerName').value = authUser.username;
     $('#playerName').disabled = true;
@@ -200,9 +205,10 @@ function renderAuthUI() {
     $('#accountLevel').textContent = String(Math.max(1, Math.floor((authUser.wins || 0) / 3) + 1));
   } else {
     $('#playerName').disabled = false;
+    $('#playerName').value = 'Guest';
+    $('#accountName').textContent = 'GUEST';
     $('#accountWins').textContent = '0 W';
     $('#accountLevel').textContent = '1';
-    setNameFromStorage();
   }
 }
 
@@ -224,7 +230,7 @@ async function signup() {
     renderAuthUI();
     socket.emit('auth:set', { idToken });
     showToast('Account created.');
-    showScreen('playScreen');
+    showScreen($('#roomCodeInput').value ? 'customScreen' : 'playScreen');
   } catch (err) {
     showToast(err.message, true);
   }
@@ -242,7 +248,7 @@ async function login() {
     renderAuthUI();
     socket.emit('auth:set', { idToken });
     showToast('Logged in.');
-    showScreen('playScreen');
+    showScreen($('#roomCodeInput').value ? 'customScreen' : 'playScreen');
   } catch (err) {
     showToast(err.message, true);
   }
@@ -623,7 +629,11 @@ function initEvents() {
   $$('[data-screen]').forEach((el) => {
     el.addEventListener('click', (event) => {
       event.preventDefault();
-      showScreen(el.dataset.screen);
+      const targetScreen = el.dataset.screen;
+      if (['playScreen', 'quickScreen', 'customScreen', 'lobbyScreen', 'recordScreen', 'votingScreen'].includes(targetScreen) && !requireLoginToPlay()) {
+        return;
+      }
+      showScreen(targetScreen);
     });
   });
 
@@ -650,8 +660,12 @@ function initEvents() {
   });
   $$('.browser-tab').forEach((btn) => btn.addEventListener('click', () => setQuickTab(btn.dataset.quickTab)));
   $('#refreshQuickRoomsBtn').addEventListener('click', () => socket.emit('quick:list'));
-  $('#createQuickRoomBtn').addEventListener('click', () => socket.emit('quick:create', { name: getName() }));
+  $('#createQuickRoomBtn').addEventListener('click', () => {
+    if (!requireLoginToPlay()) return;
+    socket.emit('quick:create', { name: getName() });
+  });
   $('#joinQuickRoomBtn').addEventListener('click', () => {
+    if (!requireLoginToPlay()) return;
     socket.emit('quick:join', { name: getName(), code: $('#quickRoomCodeInput').value });
   });
   $('#quickRoomCodeInput').addEventListener('input', (e) => { e.target.value = e.target.value.toUpperCase(); });
@@ -659,11 +673,18 @@ function initEvents() {
   $('#quickRoomsList').addEventListener('click', (e) => {
     const card = e.target.closest('.room-card');
     if (!card) return;
+    if (!requireLoginToPlay()) return;
     socket.emit('quick:join', { name: getName(), code: card.dataset.code });
   });
 
-  $('#createRoomBtn').addEventListener('click', () => socket.emit('custom:create', { name: getName() }));
-  $('#joinRoomBtn').addEventListener('click', () => socket.emit('custom:join', { name: getName(), code: $('#roomCodeInput').value }));
+  $('#createRoomBtn').addEventListener('click', () => {
+    if (!requireLoginToPlay()) return;
+    socket.emit('custom:create', { name: getName() });
+  });
+  $('#joinRoomBtn').addEventListener('click', () => {
+    if (!requireLoginToPlay()) return;
+    socket.emit('custom:join', { name: getName(), code: $('#roomCodeInput').value });
+  });
   $('#roomCodeInput').addEventListener('input', (e) => { e.target.value = e.target.value.toUpperCase(); });
   $('#roomCodeInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('#joinRoomBtn').click(); });
 
@@ -686,9 +707,14 @@ function initEvents() {
 
   const roomFromUrl = new URLSearchParams(location.search).get('room');
   if (roomFromUrl) {
-    showScreen('customScreen');
     $('#roomCodeInput').value = roomFromUrl.toUpperCase();
-    showToast('Room code loaded. Enter your name and click JOIN.');
+    if (authUser?.username) {
+      showScreen('customScreen');
+      showToast('Room code loaded. Click JOIN.');
+    } else {
+      showScreen('accountScreen');
+      showToast('Log in or create an account, then click JOIN.');
+    }
   }
 }
 

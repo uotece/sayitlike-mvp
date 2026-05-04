@@ -9,6 +9,7 @@
 <body>
   <div class="game-shell">
     <main class="game-frame">
+      <input id="playerName" type="hidden" value="Guest" />
       <div class="audio-ui">
         <button class="sound-box" id="soundToggle" aria-label="Audio settings" title="Audio settings">
           <svg viewBox="0 0 24 24" class="sound-icon" aria-hidden="true">
@@ -73,10 +74,6 @@
 
       <section class="center-stack screen" id="playScreen">
         <div class="mini-title">PLAY</div>
-        <div class="player-name-box">
-          <label for="playerName">YOUR NAME</label>
-          <input id="playerName" maxlength="16" placeholder="Guest" autocomplete="off" />
-        </div>
         <div class="menu-panel">
           <button class="menu-btn active" data-screen="quickScreen" id="quickBattleMenuBtn"><strong>QUICK BATTLE</strong><small>JOIN ACTIVE ROOMS OR CREATE ONE</small></button>
           <button class="menu-btn" data-screen="customScreen"><strong>CUSTOM MODE</strong><small>CREATE OR JOIN BY CODE</small></button>
@@ -306,7 +303,7 @@
           <a href="#">DISCORD</a>
           <a href="#" data-screen="donateScreen">DONATE</a>
         </nav>
-        <div class="status">ACTIVE PLAYERS: <span id="activePlayers">000</span> <span class="dot"></span> V 0.4.0 <span class="dot red"></span></div>
+        <div class="status">ACTIVE PLAYERS: <span id="activePlayers">000</span> <span class="dot"></span> V 0.4.1 <span class="dot red"></span></div>
       </footer>
     </main>
   </div>
