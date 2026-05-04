@@ -13,7 +13,7 @@ const io = new Server(server, {
 const PORT = process.env.PORT || 3000;
 const MAX_PLAYERS = 10;
 const RECORDING_SECONDS = 60;
-const VOTING_SECONDS = 45;
+const VOTING_SECONDS = 60;
 const MAX_CLIP_BYTES = 1_400_000;
 const LEADERBOARD_LIMIT = 25;
 
@@ -129,6 +129,7 @@ function roomPayload(room) {
     endsAt: room.endsAt,
     phaseStartedAt: room.phaseStartedAt,
     phaseDuration: room.phaseDuration,
+    remainingSeconds: room.endsAt ? Math.max(0, Math.ceil((room.endsAt - Date.now()) / 1000)) : null,
     submittedCount: [...room.players.values()].filter((p) => p.submitted).length,
     totalPlayers: room.players.size,
     votedCount: room.votes.size
@@ -288,7 +289,8 @@ function endRecording(room) {
       prompt: room.prompt,
       endsAt: room.endsAt,
       phaseStartedAt: room.phaseStartedAt,
-      phaseDuration: room.phaseDuration
+      phaseDuration: room.phaseDuration,
+      remainingSeconds: room.endsAt ? Math.max(0, Math.ceil((room.endsAt - Date.now()) / 1000)) : null
     });
   }
   emitRoom(room);
@@ -440,6 +442,10 @@ io.on('connection', (socket) => {
     if (!room || room.status !== 'recording') return;
     const player = room.players.get(socket.id);
     if (!player) return;
+    if (player.submitted) {
+      socket.emit('app:error', 'You already submitted your clip.');
+      return;
+    }
 
     const data = String(audioData || '');
     if (!data.startsWith('data:audio/')) {

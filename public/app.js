@@ -15,6 +15,8 @@ let tickTimer = null;
 let soundEnabled = true;
 let uiVolume = Number(localStorage.getItem('sayitlike_volume') || 70);
 let audioCtx = null;
+let activePhaseKey = null;
+let localTimerEnd = null;
 let quickRooms = [];
 let leaderboard = [];
 
@@ -109,16 +111,19 @@ function copyText(value) {
     .catch(() => showToast('Could not copy. Copy manually.', true));
 }
 
-function updateTimer(startedAt, durationSeconds, elementId) {
+function updateTimer(remainingSeconds, elementId) {
   clearInterval(tickTimer);
   const el = document.getElementById(elementId);
-  if (!startedAt || !durationSeconds || !el) return;
+  if (remainingSeconds == null || !el) return;
+
+  localTimerEnd = Date.now() + Math.max(0, Number(remainingSeconds)) * 1000;
+
   const tick = () => {
-    const elapsed = Math.floor((Date.now() - startedAt) / 1000);
-    const remaining = Math.max(0, durationSeconds - elapsed);
+    const remaining = Math.max(0, Math.ceil((localTimerEnd - Date.now()) / 1000));
     el.textContent = String(remaining).padStart(2, '0');
     if (remaining <= 0) clearInterval(tickTimer);
   };
+
   tick();
   tickTimer = setInterval(tick, 250);
 }
@@ -239,6 +244,11 @@ function resetRecorderUI(clearBlob = true) {
 
 async function startRecording() {
   try {
+    if (myPlayer()?.submitted) {
+      showToast('You already submitted your clip.', true);
+      lockRecorderAfterSubmit();
+      return;
+    }
     actionSound();
     if (!navigator.mediaDevices?.getUserMedia) {
       showToast('Your browser does not support microphone recording.', true);
@@ -295,6 +305,11 @@ function blobToDataURL(blob) {
 }
 
 async function submitClip() {
+  if (myPlayer()?.submitted) {
+    lockRecorderAfterSubmit();
+    showToast('You already submitted your clip.', true);
+    return;
+  }
   if (!recordedBlob) {
     showToast('Record a clip first.', true);
     return;
@@ -309,7 +324,8 @@ function renderVoting(payload) {
   currentVotingPayload = payload;
   $('#voteLine').textContent = payload.prompt?.line || '—';
   $('#voteStyle').textContent = payload.prompt?.style || '—';
-  updateTimer(payload.phaseStartedAt, payload.phaseDuration, 'voteTimer');
+  activePhaseKey = `${currentRoom?.code || 'room'}:${currentRoom?.round || 'round'}:voting`;
+  updateTimer(payload.remainingSeconds ?? payload.phaseDuration ?? 60, 'voteTimer');
 
   const clipList = $('#clipList');
   clipList.innerHTML = '';
@@ -471,10 +487,7 @@ socket.on('room:joined', (payload) => {
 });
 socket.on('room:update', renderRoom);
 socket.on('clip:submitted', () => {
-  $('#clipStatus').textContent = 'Submitted. Waiting for the other players.';
-  $('#recordBtn').disabled = true;
-  $('#stopBtn').disabled = true;
-  $('#submitClipBtn').disabled = true;
+  lockRecorderAfterSubmit();
   showToast('Clip submitted.');
 });
 socket.on('round:voting', renderVoting);
