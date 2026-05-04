@@ -10,9 +10,6 @@ window.SAYITLIKE_FIREBASE_CONFIG = {
 };
 
 (function setupAuthUpgrade() {
-  const FIRESTORE_SCRIPT = "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore-compat.js";
-  let firestoreLoader = null;
-
   function ready(fn) {
     if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", fn);
     else setTimeout(fn, 0);
@@ -66,65 +63,14 @@ window.SAYITLIKE_FIREBASE_CONFIG = {
     else alert(message);
   }
 
-  function loadFirestoreCompat() {
-    if (window.firebase?.firestore) return Promise.resolve();
-    if (firestoreLoader) return firestoreLoader;
-
-    firestoreLoader = new Promise((resolve, reject) => {
-      const existing = document.querySelector(`script[src="${FIRESTORE_SCRIPT}"]`);
-      if (existing) {
-        existing.addEventListener("load", resolve, { once: true });
-        existing.addEventListener("error", reject, { once: true });
-        return;
-      }
-
-      const script = document.createElement("script");
-      script.src = FIRESTORE_SCRIPT;
-      script.onload = resolve;
-      script.onerror = () => reject(new Error("Could not load username login support."));
-      document.head.appendChild(script);
-    });
-
-    return firestoreLoader;
-  }
-
-  async function resolveEmailFromUsername(username) {
-    const key = usernameKey(username);
-    const cached = getCachedUsernameEmail(key);
-    if (cached) return cached;
-
-    await loadFirestoreCompat();
-
-    if (!window.firebase?.apps?.length) firebase.initializeApp(window.SAYITLIKE_FIREBASE_CONFIG);
-
-    const db = firebase.firestore();
-    const usernameSnap = await db.collection("usernames").doc(key).get();
-    if (!usernameSnap.exists) {
-      throw new Error("No account found with that username. Try your email instead.");
-    }
-
-    const usernameData = usernameSnap.data() || {};
-    if (usernameData.email) {
-      cacheUsernameEmail(key, usernameData.email);
-      return usernameData.email;
-    }
-
-    if (usernameData.uid) {
-      const userSnap = await db.collection("users").doc(usernameData.uid).get();
-      const userData = userSnap.exists ? (userSnap.data() || {}) : {};
-      if (userData.email) {
-        cacheUsernameEmail(key, userData.email);
-        return userData.email;
-      }
-    }
-
-    throw new Error("Username login could not resolve this account. Use your email this time.");
-  }
-
   async function emailFromIdentifier(identifier) {
     const value = clean(identifier);
     if (looksLikeEmail(value)) return value.toLowerCase();
-    return resolveEmailFromUsername(value);
+
+    const cached = getCachedUsernameEmail(value);
+    if (cached) return cached;
+
+    throw new Error("Username login needs the server-side resolver. For now, log in with your email.");
   }
 
   function showAuthMode(mode) {
@@ -211,11 +157,11 @@ window.SAYITLIKE_FIREBASE_CONFIG = {
     try {
       requireFirebaseClient();
       const identifier = clean(qs("#authLoginIdentifier")?.value);
-      if (!identifier) throw new Error("Enter your email or username first.");
+      if (!identifier) throw new Error("Enter your email first.");
+      if (!looksLikeEmail(identifier)) throw new Error("Password reset currently needs your email address.");
 
       setBusy(button, true, "SENDING...");
-      const email = await emailFromIdentifier(identifier);
-      await firebaseAuth.sendPasswordResetEmail(email);
+      await firebaseAuth.sendPasswordResetEmail(identifier.toLowerCase());
       toast("Password reset email sent.");
     } catch (err) {
       toast(err.message || "Could not send password reset email.", true);
@@ -268,7 +214,7 @@ window.SAYITLIKE_FIREBASE_CONFIG = {
           <button class="pixel-btn full" id="authLoginSubmit" type="button">LOGIN</button>
         </div>
         <button class="auth-link-btn" id="authForgotBtn" type="button">Forgot your password? Send reset email.</button>
-        <p class="tiny-note auth-help">Login only needs your email or username plus your password.</p>
+        <p class="tiny-note auth-help">Email login works now. Username login works on this device after one successful email login/signup, and needs a server resolver for full support.</p>
       </div>
 
       <div id="authSignupForm" class="auth-form" hidden>
