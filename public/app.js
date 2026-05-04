@@ -107,22 +107,81 @@ function setNameFromStorage() {
   $('#accountName').textContent = saved.toUpperCase().replace(/\s+/g, '_') + '_';
 }
 
-async function authRequest(path, body = null) {
+let firebaseAuth = null;
+let firebaseConfigured = false;
+
+function initFirebaseAuth() {
+  try {
+    const config = window.SAYITLIKE_FIREBASE_CONFIG || {};
+    if (!config.apiKey || String(config.apiKey).startsWith('PASTE_')) {
+      firebaseConfigured = false;
+      console.warn('Firebase web config is missing. Edit public/firebase-config.js.');
+      return;
+    }
+
+    if (!firebase.apps.length) firebase.initializeApp(config);
+    firebaseAuth = firebase.auth();
+    firebaseConfigured = true;
+
+    firebaseAuth.onAuthStateChanged(async (user) => {
+      if (!user) {
+        authUser = null;
+        renderAuthUI();
+        socket.emit('auth:clear');
+        return;
+      }
+
+      try {
+        const idToken = await user.getIdToken();
+        const profile = await fetchProfile(idToken);
+        authUser = profile;
+        renderAuthUI();
+        socket.emit('auth:set', { idToken });
+      } catch (err) {
+        console.error('Could not load Firebase profile:', err);
+        showToast(err.message || 'Could not load account profile.', true);
+      }
+    });
+  } catch (err) {
+    firebaseConfigured = false;
+    console.error('Firebase init failed:', err);
+    showToast('Firebase is not configured correctly.', true);
+  }
+}
+
+function requireFirebaseClient() {
+  if (!firebaseConfigured || !firebaseAuth) {
+    throw new Error('Firebase is not configured. Edit firebase-config.js first.');
+  }
+}
+
+async function apiRequest(path, idToken, body = null) {
   const options = {
     method: body ? 'POST' : 'GET',
-    credentials: 'include',
-    headers: {}
+    headers: {
+      Authorization: `Bearer ${idToken}`
+    }
   };
 
   if (body) {
     options.headers['Content-Type'] = 'application/json';
-    options.body = JSON.stringify(body);
+    options.body = JSON.stringify({ ...body, idToken });
   }
 
   const res = await fetch(path, options);
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || 'Account request failed.');
   return data;
+}
+
+async function fetchProfile(idToken) {
+  const data = await apiRequest('/api/users/me', idToken);
+  return data.user;
+}
+
+async function saveProfile(idToken, username) {
+  const data = await apiRequest('/api/users/profile', idToken, { username });
+  return data.user;
 }
 
 function renderAuthUI() {
@@ -148,24 +207,22 @@ function renderAuthUI() {
 }
 
 async function loadAuthUser() {
-  try {
-    const data = await authRequest('/api/auth/me');
-    authUser = data.user || null;
-    renderAuthUI();
-  } catch {
-    authUser = null;
-    renderAuthUI();
-  }
+  initFirebaseAuth();
 }
 
 async function signup() {
   try {
-    const username = $('#authUsername').value;
+    requireFirebaseClient();
+    const email = $('#authEmail').value.trim();
+    const username = $('#authUsername').value.trim();
     const password = $('#authPassword').value;
-    const data = await authRequest('/api/auth/signup', { username, password });
-    authUser = data.user;
+
+    const credential = await firebaseAuth.createUserWithEmailAndPassword(email, password);
+    await credential.user.updateProfile({ displayName: username });
+    const idToken = await credential.user.getIdToken(true);
+    authUser = await saveProfile(idToken, username);
     renderAuthUI();
-    socket.emit('auth:refresh');
+    socket.emit('auth:set', { idToken });
     showToast('Account created.');
     showScreen('playScreen');
   } catch (err) {
@@ -175,12 +232,15 @@ async function signup() {
 
 async function login() {
   try {
-    const username = $('#authUsername').value;
+    requireFirebaseClient();
+    const email = $('#authEmail').value.trim();
     const password = $('#authPassword').value;
-    const data = await authRequest('/api/auth/login', { username, password });
-    authUser = data.user;
+
+    const credential = await firebaseAuth.signInWithEmailAndPassword(email, password);
+    const idToken = await credential.user.getIdToken(true);
+    authUser = await fetchProfile(idToken);
     renderAuthUI();
-    socket.emit('auth:refresh');
+    socket.emit('auth:set', { idToken });
     showToast('Logged in.');
     showScreen('playScreen');
   } catch (err) {
@@ -190,13 +250,14 @@ async function login() {
 
 async function logout() {
   try {
-    await authRequest('/api/auth/logout', {});
+    requireFirebaseClient();
+    await firebaseAuth.signOut();
   } catch {
-    // Keep going locally even if the logout request fails.
+    // Keep going locally even if Firebase signout fails.
   }
   authUser = null;
   renderAuthUI();
-  socket.emit('auth:refresh');
+  socket.emit('auth:clear');
   showToast('Logged out.');
   showScreen('homeScreen');
 }
@@ -545,6 +606,9 @@ function initEvents() {
   $('#loginBtn').addEventListener('click', login);
   $('#logoutBtn').addEventListener('click', logout);
   $('#authPassword').addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') login();
+  });
+  $('#authEmail').addEventListener('keydown', (event) => {
     if (event.key === 'Enter') login();
   });
 

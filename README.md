@@ -57,3 +57,25 @@ This version includes simple username/password accounts using server-side passwo
 Accounts are stored in `data/users.json`.
 
 For local testing this is fine. On Render, use a persistent disk for `data/` if you want accounts and leaderboard stats to survive restarts/redeploys.
+
+
+## Firebase Auth setup
+
+This version uses Firebase Auth + Firestore.
+
+Client:
+1. Create a Firebase project.
+2. Enable Authentication → Sign-in method → Email/Password.
+3. Enable Firestore Database.
+4. Create a Web App in Firebase Project Settings.
+5. Paste the web config into `public/firebase-config.js`.
+
+Server on Render:
+1. Firebase Console → Project settings → Service accounts.
+2. Generate a new private key JSON.
+3. Base64 encode the JSON.
+4. Add this Render environment variable:
+
+`FIREBASE_SERVICE_ACCOUNT_BASE64=<base64 encoded service account json>`
+
+After changing env vars, redeploy on Render.

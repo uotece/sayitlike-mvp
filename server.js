@@ -2,8 +2,7 @@ const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const path = require('path');
-const fs = require('fs');
-const crypto = require('crypto');
+const admin = require('firebase-admin');
 
 const app = express();
 const server = http.createServer(app);
@@ -20,45 +19,63 @@ const MAX_CLIP_BYTES = 1_400_000;
 const LEADERBOARD_LIMIT = 25;
 
 
-app.use(express.json({ limit: '32kb' }));
+app.use(express.json({ limit: '64kb' }));
 
-const DATA_DIR = path.join(__dirname, 'data');
-const USERS_FILE = path.join(DATA_DIR, 'users.json');
-const sessions = new Map(); // sessionId -> { userId, createdAt }
+let firebaseReady = false;
+let db = null;
 
-function ensureDataDir() {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-}
-
-function loadUserDb() {
+function initFirebaseAdmin() {
   try {
-    ensureDataDir();
-    if (!fs.existsSync(USERS_FILE)) return { users: [] };
-    const parsed = JSON.parse(fs.readFileSync(USERS_FILE, 'utf8'));
-    if (!parsed || !Array.isArray(parsed.users)) return { users: [] };
-    return parsed;
+    if (admin.apps.length) {
+      firebaseReady = true;
+      db = admin.firestore();
+      return;
+    }
+
+    if (process.env.FIREBASE_SERVICE_ACCOUNT_BASE64) {
+      const serviceAccount = JSON.parse(
+        Buffer.from(process.env.FIREBASE_SERVICE_ACCOUNT_BASE64, 'base64').toString('utf8')
+      );
+      admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
+    } else if (process.env.FIREBASE_SERVICE_ACCOUNT) {
+      const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+      admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
+    } else if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
+      admin.initializeApp({ credential: admin.credential.applicationDefault() });
+    } else {
+      console.warn('Firebase Admin is not configured. Set FIREBASE_SERVICE_ACCOUNT_BASE64 on Render.');
+      return;
+    }
+
+    firebaseReady = true;
+    db = admin.firestore();
+    console.log('Firebase Admin initialized.');
   } catch (err) {
-    console.error('Could not load users.json:', err);
-    return { users: [] };
+    firebaseReady = false;
+    db = null;
+    console.error('Firebase Admin initialization failed:', err);
   }
 }
 
-let userDb = loadUserDb();
+initFirebaseAdmin();
 
-function saveUserDb() {
-  ensureDataDir();
-  const tmp = USERS_FILE + '.tmp';
-  fs.writeFileSync(tmp, JSON.stringify(userDb, null, 2));
-  fs.renameSync(tmp, USERS_FILE);
+function requireFirebase() {
+  if (!firebaseReady || !db) {
+    const error = new Error('Firebase Admin is not configured on the server.');
+    error.statusCode = 503;
+    throw error;
+  }
 }
 
-function publicUser(user) {
-  if (!user) return null;
+function publicUserFromDoc(uid, data = {}) {
+  if (!uid) return null;
   return {
-    id: user.id,
-    username: user.username,
-    wins: user.wins || 0,
-    gamesPlayed: user.gamesPlayed || 0
+    id: uid,
+    uid,
+    email: data.email || '',
+    username: data.username || 'Guest',
+    wins: data.wins || 0,
+    gamesPlayed: data.gamesPlayed || 0
   };
 }
 
@@ -68,142 +85,116 @@ function cleanUsername(username) {
   return clean;
 }
 
-function cleanPassword(password) {
-  const clean = String(password || '');
-  if (clean.length < 4 || clean.length > 72) return null;
-  return clean;
+async function verifyIdToken(idToken) {
+  requireFirebase();
+  if (!idToken) {
+    const error = new Error('Missing Firebase ID token.');
+    error.statusCode = 401;
+    throw error;
+  }
+  return admin.auth().verifyIdToken(String(idToken));
 }
 
-function findUserByKey(usernameKey) {
-  return userDb.users.find((user) => user.usernameKey === usernameKey) || null;
+function getBearerToken(req) {
+  const header = String(req.headers.authorization || '');
+  if (!header.startsWith('Bearer ')) return '';
+  return header.slice('Bearer '.length).trim();
 }
 
-function findUserById(userId) {
-  return userDb.users.find((user) => user.id === userId) || null;
+async function getUserProfile(uid) {
+  requireFirebase();
+  const snap = await db.collection('users').doc(uid).get();
+  if (!snap.exists) return null;
+  return publicUserFromDoc(uid, snap.data());
 }
 
-function hashPassword(password, salt = crypto.randomBytes(16).toString('hex')) {
-  const hash = crypto.scryptSync(password, salt, 64).toString('hex');
-  return { salt, hash };
+async function upsertUserProfile({ uid, email, username }) {
+  requireFirebase();
+
+  const clean = cleanUsername(username);
+  if (!clean) {
+    const error = new Error('Username must be 3-16 characters and use only letters, numbers, _ or -.');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const usernameKey = clean.toLowerCase();
+  const userRef = db.collection('users').doc(uid);
+  const usernameRef = db.collection('usernames').doc(usernameKey);
+
+  await db.runTransaction(async (tx) => {
+    const usernameSnap = await tx.get(usernameRef);
+    if (usernameSnap.exists && usernameSnap.data().uid !== uid) {
+      const error = new Error('Username already taken.');
+      error.statusCode = 409;
+      throw error;
+    }
+
+    const userSnap = await tx.get(userRef);
+    const previousUsernameKey = userSnap.exists ? userSnap.data().usernameKey : null;
+
+    if (previousUsernameKey && previousUsernameKey !== usernameKey) {
+      tx.delete(db.collection('usernames').doc(previousUsernameKey));
+    }
+
+    tx.set(usernameRef, { uid, username: clean, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+    tx.set(userRef, {
+      uid,
+      email: email || '',
+      username: clean,
+      usernameKey,
+      wins: userSnap.exists ? (userSnap.data().wins || 0) : 0,
+      gamesPlayed: userSnap.exists ? (userSnap.data().gamesPlayed || 0) : 0,
+      createdAt: userSnap.exists ? (userSnap.data().createdAt || admin.firestore.FieldValue.serverTimestamp()) : admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    }, { merge: true });
+  });
+
+  return getUserProfile(uid);
 }
 
-function verifyPassword(password, user) {
+async function userFromToken(idToken) {
+  const decoded = await verifyIdToken(idToken);
+  let profile = await getUserProfile(decoded.uid);
+
+  if (!profile) {
+    const fallbackUsername =
+      cleanUsername(decoded.name) ||
+      cleanUsername((decoded.email || '').split('@')[0]) ||
+      `user_${decoded.uid.slice(0, 6)}`;
+
+    profile = await upsertUserProfile({
+      uid: decoded.uid,
+      email: decoded.email || '',
+      username: fallbackUsername
+    });
+  }
+
+  return profile;
+}
+
+app.post('/api/users/profile', async (req, res) => {
   try {
-    const attempted = crypto.scryptSync(password, user.passwordSalt, 64);
-    const stored = Buffer.from(user.passwordHash, 'hex');
-    return stored.length === attempted.length && crypto.timingSafeEqual(stored, attempted);
-  } catch {
-    return false;
+    const decoded = await verifyIdToken(req.body?.idToken);
+    const profile = await upsertUserProfile({
+      uid: decoded.uid,
+      email: decoded.email || '',
+      username: req.body?.username
+    });
+    res.json({ user: profile });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not save profile.' });
   }
-}
-
-function parseCookies(cookieHeader = '') {
-  return Object.fromEntries(
-    String(cookieHeader)
-      .split(';')
-      .map((part) => part.trim())
-      .filter(Boolean)
-      .map((part) => {
-        const index = part.indexOf('=');
-        if (index === -1) return [part, ''];
-        return [decodeURIComponent(part.slice(0, index)), decodeURIComponent(part.slice(index + 1))];
-      })
-  );
-}
-
-function getUserFromCookieHeader(cookieHeader = '') {
-  const cookies = parseCookies(cookieHeader);
-  const sessionId = cookies.sayitlike_session;
-  if (!sessionId) return null;
-  const session = sessions.get(sessionId);
-  if (!session) return null;
-  return findUserById(session.userId);
-}
-
-function getUserFromReq(req) {
-  return getUserFromCookieHeader(req.headers.cookie || '');
-}
-
-function cookieOptions(req) {
-  const isSecure = req.secure || req.headers['x-forwarded-proto'] === 'https';
-  return [
-    'HttpOnly',
-    'Path=/',
-    'SameSite=Lax',
-    'Max-Age=2592000',
-    isSecure ? 'Secure' : ''
-  ].filter(Boolean).join('; ');
-}
-
-function setSessionCookie(req, res, user) {
-  const sessionId = crypto.randomBytes(32).toString('hex');
-  sessions.set(sessionId, { userId: user.id, createdAt: Date.now() });
-  res.setHeader('Set-Cookie', `sayitlike_session=${encodeURIComponent(sessionId)}; ${cookieOptions(req)}`);
-}
-
-function clearSessionCookie(req, res) {
-  const cookies = parseCookies(req.headers.cookie || '');
-  if (cookies.sayitlike_session) sessions.delete(cookies.sayitlike_session);
-  res.setHeader('Set-Cookie', `sayitlike_session=; HttpOnly; Path=/; SameSite=Lax; Max-Age=0`);
-}
-
-app.post('/api/auth/signup', (req, res) => {
-  const username = cleanUsername(req.body?.username);
-  const password = cleanPassword(req.body?.password);
-
-  if (!username) {
-    return res.status(400).json({ error: 'Username must be 3-16 characters and use only letters, numbers, _ or -.' });
-  }
-  if (!password) {
-    return res.status(400).json({ error: 'Password must be 4-72 characters.' });
-  }
-
-  const usernameKey = username.toLowerCase();
-  if (findUserByKey(usernameKey)) {
-    return res.status(409).json({ error: 'Username already taken.' });
-  }
-
-  const { salt, hash } = hashPassword(password);
-  const user = {
-    id: crypto.randomUUID(),
-    username,
-    usernameKey,
-    passwordSalt: salt,
-    passwordHash: hash,
-    wins: 0,
-    gamesPlayed: 0,
-    createdAt: new Date().toISOString()
-  };
-
-  userDb.users.push(user);
-  saveUserDb();
-  setSessionCookie(req, res, user);
-  res.json({ user: publicUser(user) });
 });
 
-app.post('/api/auth/login', (req, res) => {
-  const username = cleanUsername(req.body?.username);
-  const password = cleanPassword(req.body?.password);
-  if (!username || !password) {
-    return res.status(400).json({ error: 'Invalid username or password.' });
+app.get('/api/users/me', async (req, res) => {
+  try {
+    const idToken = getBearerToken(req);
+    const profile = await userFromToken(idToken);
+    res.json({ user: profile });
+  } catch (err) {
+    res.status(err.statusCode || 401).json({ error: err.message || 'Not signed in.' });
   }
-
-  const user = findUserByKey(username.toLowerCase());
-  if (!user || !verifyPassword(password, user)) {
-    return res.status(401).json({ error: 'Invalid username or password.' });
-  }
-
-  setSessionCookie(req, res, user);
-  res.json({ user: publicUser(user) });
-});
-
-app.post('/api/auth/logout', (req, res) => {
-  clearSessionCookie(req, res);
-  res.json({ ok: true });
-});
-
-app.get('/api/auth/me', (req, res) => {
-  res.json({ user: publicUser(getUserFromReq(req)) });
 });
 
 
@@ -349,20 +340,29 @@ function emitQuickRooms(target = io) {
   target.emit('quick:list', quickRoomsPayload());
 }
 
-function leaderboardPayload() {
-  const accountRows = userDb.users.map((user) => ({
-    name: user.username,
-    wins: user.wins || 0,
-    gamesPlayed: user.gamesPlayed || 0,
-    isAccount: true
-  }));
+async function leaderboardPayload() {
+  if (firebaseReady && db) {
+    const snap = await db.collection('users')
+      .orderBy('wins', 'desc')
+      .limit(LEADERBOARD_LIMIT)
+      .get();
 
-  const guestRows = [...playerStats.values()].map((entry) => ({
-    ...entry,
-    isAccount: false
-  }));
+    return snap.docs
+      .map((doc, index) => {
+        const data = doc.data();
+        return {
+          rank: index + 1,
+          name: data.username || 'Guest',
+          wins: data.wins || 0,
+          gamesPlayed: data.gamesPlayed || 0,
+          winRate: data.gamesPlayed ? Math.round(((data.wins || 0) / data.gamesPlayed) * 100) : 0,
+          isAccount: true
+        };
+      })
+      .filter((entry) => entry.wins > 0 || entry.gamesPlayed > 0);
+  }
 
-  return [...accountRows, ...guestRows]
+  return [...playerStats.values()]
     .filter((entry) => entry.wins > 0 || entry.gamesPlayed > 0)
     .sort((a, b) =>
       b.wins - a.wins ||
@@ -376,13 +376,20 @@ function leaderboardPayload() {
       wins: entry.wins,
       gamesPlayed: entry.gamesPlayed,
       winRate: entry.gamesPlayed ? Math.round((entry.wins / entry.gamesPlayed) * 100) : 0,
-      isAccount: !!entry.isAccount
+      isAccount: false
     }));
 }
 
-function emitLeaderboard(target = io) {
-  target.emit('leaderboard:update', leaderboardPayload());
+async function emitLeaderboard(target = io) {
+  try {
+    target.emit('leaderboard:update', await leaderboardPayload());
+  } catch (err) {
+    console.error('Could not load leaderboard:', err);
+    target.emit('leaderboard:update', []);
+  }
 }
+
+
 
 function cleanupRoom(room) {
   clearTimeout(room.timers.recording);
@@ -534,48 +541,45 @@ function endVoting(room) {
   const maxVotes = clips.reduce((max, c) => Math.max(max, c.votes), 0);
   const winners = clips.filter((c) => c.votes === maxVotes && clips.length && maxVotes >= 0);
 
-  // update leaderboard stats. Accounts are persisted; guest stats stay in memory.
-  let changedUserDb = false;
+  // update leaderboard stats. Account stats persist in Firestore; guest stats stay in memory.
   const participantPlayers = new Map();
   for (const clip of room.clips.values()) {
     const player = room.players.get(clip.playerId);
     if (player) participantPlayers.set(player.id, player);
   }
 
+  const winningPlayerIds = new Set(
+    winners
+      .map((winner) => room.players.get(winner.playerId))
+      .filter(Boolean)
+      .map((player) => player.id)
+  );
+
+  const accountUpdates = [];
+
   for (const player of participantPlayers.values()) {
-    if (player.userId) {
-      const user = findUserById(player.userId);
-      if (user) {
-        user.gamesPlayed = (user.gamesPlayed || 0) + 1;
-        changedUserDb = true;
-      }
+    if (player.userId && firebaseReady && db) {
+      accountUpdates.push(
+        db.collection('users').doc(player.userId).set({
+          gamesPlayed: admin.firestore.FieldValue.increment(1),
+          wins: winningPlayerIds.has(player.id) ? admin.firestore.FieldValue.increment(1) : admin.firestore.FieldValue.increment(0),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp()
+        }, { merge: true })
+      );
     } else {
       const norm = normalizeName(player.name);
       const current = playerStats.get(norm) || { name: player.name, wins: 0, gamesPlayed: 0 };
       current.name = player.name;
       current.gamesPlayed += 1;
+      if (winningPlayerIds.has(player.id)) current.wins += 1;
       playerStats.set(norm, current);
     }
   }
 
-  for (const winner of winners) {
-    const player = room.players.get(winner.playerId);
-    if (player?.userId) {
-      const user = findUserById(player.userId);
-      if (user) {
-        user.wins = (user.wins || 0) + 1;
-        changedUserDb = true;
-      }
-    } else {
-      const norm = normalizeName(winner.playerName);
-      const current = playerStats.get(norm) || { name: winner.playerName, wins: 0, gamesPlayed: 0 };
-      current.name = winner.playerName;
-      current.wins += 1;
-      playerStats.set(norm, current);
-    }
-  }
-
-  if (changedUserDb) saveUserDb();
+  Promise.allSettled(accountUpdates).then(() => emitLeaderboard()).catch((err) => {
+    console.error('Could not update account stats:', err);
+    emitLeaderboard();
+  });
 
   io.to(room.code).emit('round:results', {
     prompt: room.prompt,
@@ -584,7 +588,6 @@ function endVoting(room) {
     totalVotes: room.votes.size
   });
   emitRoom(room);
-  emitLeaderboard();
   emitQuickRooms();
 }
 
@@ -599,8 +602,7 @@ function joinRoom(socket, room, name) {
     return false;
   }
 
-  const authUser = socket.data.user || getUserFromCookieHeader(socket.handshake.headers.cookie || '');
-  if (authUser) socket.data.user = authUser;
+  const authUser = socket.data.user || null;
 
   const cleanName = authUser
     ? authUser.username
@@ -631,17 +633,27 @@ function joinRoom(socket, room, name) {
 }
 
 io.on('connection', (socket) => {
-  socket.data.user = getUserFromCookieHeader(socket.handshake.headers.cookie || '');
-  socket.emit('app:hello', { playerId: socket.id, maxPlayers: MAX_PLAYERS, user: publicUser(socket.data.user) });
+  socket.data.user = null;
+  socket.emit('app:hello', { playerId: socket.id, maxPlayers: MAX_PLAYERS, user: null });
   emitQuickRooms(socket);
   emitLeaderboard(socket);
 
   socket.on('quick:list', () => emitQuickRooms(socket));
   socket.on('leaderboard:get', () => emitLeaderboard(socket));
-  socket.on('auth:refresh', () => {
-    socket.data.user = getUserFromCookieHeader(socket.handshake.headers.cookie || '');
-    socket.emit('app:hello', { playerId: socket.id, maxPlayers: MAX_PLAYERS, user: publicUser(socket.data.user) });
-    emitLeaderboard(socket);
+  socket.on('auth:set', async ({ idToken } = {}) => {
+    try {
+      socket.data.user = await userFromToken(idToken);
+      socket.emit('app:hello', { playerId: socket.id, maxPlayers: MAX_PLAYERS, user: socket.data.user });
+      emitLeaderboard(socket);
+    } catch (err) {
+      socket.data.user = null;
+      socket.emit('app:error', err.message || 'Could not verify Firebase account.');
+      socket.emit('app:hello', { playerId: socket.id, maxPlayers: MAX_PLAYERS, user: null });
+    }
+  });
+  socket.on('auth:clear', () => {
+    socket.data.user = null;
+    socket.emit('app:hello', { playerId: socket.id, maxPlayers: MAX_PLAYERS, user: null });
   });
 
   socket.on('quick:create', ({ name } = {}) => {
