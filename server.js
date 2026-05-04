@@ -137,7 +137,7 @@ async function upsertUserProfile({ uid, email, username }) {
       tx.delete(db.collection('usernames').doc(previousUsernameKey));
     }
 
-    tx.set(usernameRef, { uid, username: clean, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+    tx.set(usernameRef, { uid, username: clean, email: email || '', updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
     tx.set(userRef, {
       uid,
       email: email || '',
@@ -172,6 +172,51 @@ async function userFromToken(idToken) {
 
   return profile;
 }
+
+
+app.post('/api/users/resolve-login', async (req, res) => {
+  try {
+    requireFirebase();
+
+    const identifier = String(req.body?.identifier || '').trim();
+
+    if (!identifier) {
+      return res.status(400).json({ error: 'Enter your email or username.' });
+    }
+
+    if (identifier.includes('@')) {
+      return res.json({ email: identifier });
+    }
+
+    const username = cleanUsername(identifier);
+    if (!username) {
+      return res.status(400).json({ error: 'Invalid username.' });
+    }
+
+    const usernameKey = username.toLowerCase();
+    const usernameSnap = await db.collection('usernames').doc(usernameKey).get();
+
+    if (!usernameSnap.exists) {
+      return res.status(404).json({ error: 'No account found for that username.' });
+    }
+
+    const usernameData = usernameSnap.data();
+    let email = usernameData.email || '';
+
+    if (!email && usernameData.uid) {
+      const userSnap = await db.collection('users').doc(usernameData.uid).get();
+      if (userSnap.exists) email = userSnap.data().email || '';
+    }
+
+    if (!email) {
+      return res.status(404).json({ error: 'No email found for that username.' });
+    }
+
+    res.json({ email });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.message || 'Could not resolve username.' });
+  }
+});
 
 app.post('/api/users/profile', async (req, res) => {
   try {

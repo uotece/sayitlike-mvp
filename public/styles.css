@@ -258,3 +258,28 @@ a{color:inherit;text-decoration:none}button,input{font-family:inherit}button{use
   .patch-card h4{font-size:14px}
   .credit-row strong{font-size:14px}
 }
+
+
+/* v0.4.4 separated account flow */
+.auth-choice-grid{
+  display:grid;
+  gap:12px;
+}
+.auth-choice-grid .menu-btn{
+  min-height:78px;
+}
+.auth-link{
+  width:max-content;
+  margin-top:4px;
+  padding:0;
+  text-align:left;
+  border:0;
+}
+.auth-form input{
+  text-transform:none;
+}
+#signupUsername,
+#loginIdentifier,
+#forgotIdentifier{
+  text-transform:none;
+}
