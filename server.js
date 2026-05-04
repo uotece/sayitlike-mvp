@@ -608,30 +608,34 @@ function endPerformanceVoting(room) {
   const bestPerformance = winners[Math.floor(Math.random() * winners.length)] || null;
 
   room.awards = {
-    bestLine: { text: room.prompt?.line || '', winnerName: room.prompt?.lineAuthorName || 'THE ACADEMY', winnerId: room.prompt?.lineAuthorId || null },
-    bestScenario: { text: room.prompt?.scenario || '', winnerName: room.prompt?.scenarioAuthorName || 'THE ACADEMY', winnerId: room.prompt?.scenarioAuthorId || null },
+    bestLine: { text: room.prompt?.line || '', winnerName: room.prompt?.lineAuthorName || 'THE ACADEMY', winnerId: room.prompt?.lineAuthorId || null, bucks: 50 },
+    bestScenario: { text: room.prompt?.scenario || '', winnerName: room.prompt?.scenarioAuthorName || 'THE ACADEMY', winnerId: room.prompt?.scenarioAuthorId || null, bucks: 50 },
     bestPerformance: bestPerformance ? {
       text: bestPerformance.label,
       winnerName: bestPerformance.playerName,
       winnerId: bestPerformance.playerId,
       votes: bestPerformance.votes,
-      clipId: bestPerformance.clipId
+      clipId: bestPerformance.clipId,
+      bucks: 100
     } : null
   };
 
-  const winningPlayerIds = new Set(winners.map((winner) => winner.playerId));
-  const participantPlayers = new Map();
-  for (const clip of room.clips.values()) {
-    const player = room.players.get(clip.playerId);
-    if (player) participantPlayers.set(player.id, player);
-  }
+  const awardPoints = new Map();
+  const addAwardPoints = (playerId, points) => {
+    if (!playerId || !points) return;
+    awardPoints.set(playerId, (awardPoints.get(playerId) || 0) + points);
+  };
+  addAwardPoints(room.awards.bestPerformance?.winnerId, 100);
+  addAwardPoints(room.awards.bestLine?.winnerId, 50);
+  addAwardPoints(room.awards.bestScenario?.winnerId, 50);
 
   const accountUpdates = [];
-  for (const player of participantPlayers.values()) {
+  for (const player of room.players.values()) {
+    const bucksEarned = awardPoints.get(player.id) || 0;
     if (player.userId && firebaseReady && db) {
       accountUpdates.push(db.collection('users').doc(player.userId).set({
         gamesPlayed: admin.firestore.FieldValue.increment(1),
-        wins: winningPlayerIds.has(player.id) ? admin.firestore.FieldValue.increment(1) : admin.firestore.FieldValue.increment(0),
+        wins: admin.firestore.FieldValue.increment(bucksEarned),
         updatedAt: admin.firestore.FieldValue.serverTimestamp()
       }, { merge: true }));
     } else {
@@ -639,7 +643,7 @@ function endPerformanceVoting(room) {
       const current = playerStats.get(norm) || { name: player.name, wins: 0, gamesPlayed: 0 };
       current.name = player.name;
       current.gamesPlayed += 1;
-      if (winningPlayerIds.has(player.id)) current.wins += 1;
+      current.wins += bucksEarned;
       playerStats.set(norm, current);
     }
   }

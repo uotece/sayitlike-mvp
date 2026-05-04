@@ -77,10 +77,15 @@ function showScreen(screenId) {
   if (screenId === 'hallScreen') socket.emit('leaderboard:get');
 }
 
+function scenarioText(prompt) {
+  const raw = String(prompt?.scenario || prompt?.style || '—').trim();
+  return raw.replace(/^like\s+/i, '').trim() || '—';
+}
+
 function promptText(prompt) {
   if (!prompt) return '—';
   const line = prompt.line || '—';
-  const scenario = prompt.scenario || prompt.style || '—';
+  const scenario = scenarioText(prompt);
   return `Say "${line}" like ${scenario}.`;
 }
 
@@ -197,13 +202,13 @@ function renderAuthUI() {
     const signedUsername = $('#authSignedUsername');
     const signedStats = $('#authSignedStats');
     if (signedUsername) signedUsername.textContent = display;
-    if (signedStats) signedStats.textContent = `${authUser.wins || 0} WINS • ${authUser.gamesPlayed || 0} GAMES`;
-    if (accountWins) accountWins.textContent = `${authUser.wins || 0} W`;
-    if (accountLevel) accountLevel.textContent = String(Math.max(1, Math.floor((authUser.wins || 0) / 3) + 1));
+    if (signedStats) signedStats.textContent = `${authUser.wins || 0} BUCKS • ${authUser.gamesPlayed || 0} GAMES`;
+    if (accountWins) accountWins.textContent = `${authUser.wins || 0} B`;
+    if (accountLevel) accountLevel.textContent = String(Math.max(1, Math.floor((authUser.wins || 0) / 300) + 1));
   } else {
     if (playerName) { playerName.disabled = false; playerName.value = 'Guest'; }
     if (accountName) accountName.textContent = 'GUEST';
-    if (accountWins) accountWins.textContent = '0 W';
+    if (accountWins) accountWins.textContent = '0 B';
     if (accountLevel) accountLevel.textContent = '1';
   }
 }
@@ -294,7 +299,7 @@ function injectAwardsScreens() {
     .award-card{background:#140a24;border:2px solid #3f1d70;border-radius:16px;padding:14px;margin:10px 0}
     .award-title{color:var(--green);font-size:12px;text-transform:uppercase;margin-bottom:6px}
     .award-value{font-size:18px;color:#fff4e4;margin-bottom:6px}
-    .award-winner{color:var(--muted);font-size:11px;text-transform:uppercase}
+    .award-winner{color:var(--muted);font-size:11px;text-transform:uppercase}.award-bucks{color:var(--green);font-size:13px;text-transform:uppercase;margin-top:6px}
     @media(max-width:700px){.awards-vote-grid{grid-template-columns:1fr}.prompt-input{min-height:90px}}
   `;
   document.head.appendChild(style);
@@ -437,7 +442,7 @@ function renderRecording(room) {
   const line = $('#roundLine');
   const style = $('#roundStyle');
   if (line) line.textContent = room.prompt?.line || '—';
-  if (style) style.textContent = room.prompt?.scenario ? `like ${room.prompt.scenario}` : (room.prompt?.style || '—');
+  if (style) style.textContent = scenarioText(room.prompt);
   const submitted = $('#submittedCount');
   const total = $('#totalPlayers');
   if (submitted) submitted.textContent = room.submittedCount || 0;
@@ -451,7 +456,7 @@ function renderClipVoting(payload = currentPerformanceVotingPayload) {
   const line = $('#voteLine');
   const style = $('#voteStyle');
   if (line) line.textContent = payload.prompt?.line || '—';
-  if (style) style.textContent = payload.prompt?.scenario ? `like ${payload.prompt.scenario}` : (payload.prompt?.style || '—');
+  if (style) style.textContent = scenarioText(payload.prompt);
 
   const list = $('#clipList');
   if (!list) return;
@@ -480,19 +485,19 @@ function renderResults(payload = currentResultsPayload) {
   const list = $('#resultsList');
   if (!list) return;
   const awards = payload.awards || {};
+  const bestPerformance = awards.bestPerformance || {};
+  const bestLine = awards.bestLine || {};
+  const bestScenario = awards.bestScenario || {};
+  const performanceBucks = bestPerformance.bucks || 100;
+  const lineBucks = bestLine.bucks || 50;
+  const scenarioBucks = bestScenario.bucks || 50;
+
   list.innerHTML = `
-    <div class="award-card"><div class="award-title">BEST LINE GOES TO</div><div class="award-value">"${escapeHtml(awards.bestLine?.text || payload.prompt?.line || '—')}"</div><div class="award-winner">${escapeHtml(awards.bestLine?.winnerName || 'THE ACADEMY')}</div></div>
-    <div class="award-card"><div class="award-title">BEST SCENARIO GOES TO</div><div class="award-value">like ${escapeHtml(awards.bestScenario?.text || payload.prompt?.scenario || '—')}</div><div class="award-winner">${escapeHtml(awards.bestScenario?.winnerName || 'THE ACADEMY')}</div></div>
-    <div class="award-card"><div class="award-title">BEST PERFORMANCE GOES TO</div><div class="award-value">${escapeHtml(awards.bestPerformance?.winnerName || 'Nobody')}</div><div class="award-winner">${awards.bestPerformance ? `${awards.bestPerformance.votes} votes` : 'No winning clip'}</div></div>
+    <div class="award-card main-award"><div class="award-title">BEST PERFORMANCE GOES TO</div><div class="award-value">${escapeHtml(bestPerformance.winnerName || 'Nobody')}</div><div class="award-winner">${bestPerformance.clipId ? `${bestPerformance.votes || 0} votes` : 'No winning clip'}</div><div class="award-bucks">+${performanceBucks} BUCKS</div></div>
+    <div class="award-card"><div class="award-title">BEST LINE GOES TO</div><div class="award-value">"${escapeHtml(bestLine.text || payload.prompt?.line || '—')}"</div><div class="award-winner">${escapeHtml(bestLine.winnerName || 'THE ACADEMY')}</div><div class="award-bucks">+${lineBucks} BUCKS</div></div>
+    <div class="award-card"><div class="award-title">BEST SCENARIO GOES TO</div><div class="award-value">${escapeHtml(scenarioText({ scenario: bestScenario.text || payload.prompt?.scenario || '—' }))}</div><div class="award-winner">${escapeHtml(bestScenario.winnerName || 'THE ACADEMY')}</div><div class="award-bucks">+${scenarioBucks} BUCKS</div></div>
     <div class="award-card"><div class="award-title">FINAL PROMPT</div><div class="award-value">${escapeHtml(promptText(payload.prompt))}</div></div>
   `;
-
-  (payload.clips || []).sort((a, b) => b.votes - a.votes).forEach((clip) => {
-    const row = document.createElement('div');
-    row.className = 'result-row';
-    row.innerHTML = `<strong>${escapeHtml(clip.playerName)}</strong><span>${clip.votes} votes</span><audio controls src="${clip.audioData}"></audio>`;
-    list.appendChild(row);
-  });
 }
 
 function renderRoom(room) {
@@ -672,6 +677,10 @@ function initCopy() {
       <div class="section"><h3>3. PERFORM</h3><p>Everyone records the same winning prompt.</p></div>
       <div class="section"><h3>4. AWARDS</h3><p>Best Line, Best Scenario, and Best Performance are revealed like a ridiculous award show.</p></div>`;
   }
+  const roundScenarioLabel = $('#roundStyle')?.previousElementSibling;
+  if (roundScenarioLabel) roundScenarioLabel.textContent = 'SCENARIO';
+  const voteScenarioLabel = $('#voteStyle')?.previousElementSibling;
+  if (voteScenarioLabel) voteScenarioLabel.textContent = 'SCENARIO';
   const recordKicker = $('#recordScreen .modal-kicker');
   if (recordKicker) recordKicker.textContent = '35 SECONDS TO SUBMIT • 10 SECOND MAX CLIP';
   const votingKicker = $('#votingScreen .modal-kicker');
