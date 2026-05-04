@@ -431,7 +431,7 @@ function updateLobbyControls(room) {
   if (!start) return;
   const shouldShowStart = isHost && !waiting;
   start.hidden = !shouldShowStart;
-  start.style.display = shouldShowStart ? '' : 'none';
+  start.style.display = shouldShowStart ? 'inline-block' : 'none';
   if (!shouldShowStart) return;
 
   if (room?.status !== 'lobby') {
@@ -562,7 +562,7 @@ function injectAwardsScreens() {
   const style = document.createElement('style');
   style.id = 'awardsModeStyles';
   style.textContent = `
-    #startRoundBtn{display:none}.modal-title{padding-right:130px}.timer{position:relative;z-index:2}#writingScreen .modal-title,#promptVoteScreen .modal-title,#votingScreen .modal-title{font-size:clamp(24px,4.4vw,48px);line-height:.95}.prompt-input{width:100%;min-height:110px;background:#140a24;color:#fff4e4;border:2px solid var(--purple);border-radius:12px;padding:14px;font-family:ui-monospace,monospace;font-size:14px;resize:vertical;box-sizing:border-box;text-transform:none}
+    .modal-title{padding-right:130px}.timer{position:relative;z-index:2}#writingScreen .modal-title,#promptVoteScreen .modal-title,#votingScreen .modal-title{font-size:clamp(24px,4.4vw,48px);line-height:.95}.prompt-input{width:100%;min-height:110px;background:#140a24;color:#fff4e4;border:2px solid var(--purple);border-radius:12px;padding:14px;font-family:ui-monospace,monospace;font-size:14px;resize:vertical;box-sizing:border-box;text-transform:none}
     .awards-vote-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
     .option-list{display:grid;gap:10px}
     .option-card{display:block;width:100%;text-align:left;background:#140a24;color:#fff4e4;border:2px solid #3f1d70;border-radius:14px;padding:12px;cursor:pointer;font-family:ui-monospace,monospace;text-transform:none}
