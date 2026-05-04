@@ -413,6 +413,10 @@ function startRound(room) {
     io.to(room.code).emit('app:error', `Need at least ${MIN_PLAYERS} players for Awards Mode.`);
     return;
   }
+  if (room.players.size % 2 !== 0) {
+    io.to(room.code).emit('app:error', 'Awards Mode needs an even number of players. Add or remove one player.');
+    return;
+  }
 
   clearPhaseTimer(room);
   room.round += 1;
@@ -427,7 +431,7 @@ function startRound(room) {
   room.clipCounter = 0;
 
   const players = shuffledPlayers(room);
-  const lineSlots = Math.ceil(players.length / 2);
+  const lineSlots = players.length / 2;
   players.forEach((player, index) => {
     room.assignments.set(player.id, index < lineSlots ? 'line' : 'scenario');
     player.submitted = false;
@@ -671,6 +675,7 @@ function leaveCurrentRoom(socket) {
   const room = rooms.get(code);
   socketRooms.delete(socket.id);
   socket.leave(code);
+  socket.emit('room:left');
   if (!room) return;
 
   room.players.delete(socket.id);

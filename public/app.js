@@ -22,6 +22,7 @@ let firebaseAuth = null;
 let firebaseConfigured = false;
 let selectedLineId = null;
 let selectedScenarioId = null;
+let lastPhaseIntroKey = null;
 
 function getAudioContext() {
   if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -240,6 +241,82 @@ function updateTimer(remainingSeconds, elementId) {
   };
   tick();
   tickTimer = setInterval(tick, 250);
+}
+
+function injectPhaseIntro() {
+  if ($('#phaseIntroOverlay')) return;
+  const overlay = document.createElement('div');
+  overlay.id = 'phaseIntroOverlay';
+  overlay.className = 'phase-intro';
+  overlay.hidden = true;
+  overlay.innerHTML = `
+    <div class="phase-intro-card">
+      <div class="phase-intro-kicker">NEXT CATEGORY</div>
+      <h2 id="phaseIntroTitle">ROUND STARTING</h2>
+      <p id="phaseIntroText">Get ready.</p>
+    </div>`;
+  document.body.appendChild(overlay);
+
+  const style = document.createElement('style');
+  style.id = 'phaseIntroStyles';
+  style.textContent = `
+    .phase-intro{position:fixed;inset:0;z-index:9999;display:grid;place-items:center;background:rgba(6,3,18,.86);backdrop-filter:blur(2px)}
+    .phase-intro[hidden]{display:none!important}
+    .phase-intro-card{width:min(760px,86vw);border:3px solid var(--purple);background:#120822;box-shadow:0 0 44px rgba(124,58,237,.35);padding:34px;text-align:center;animation:phasePop .24s ease-out both}
+    .phase-intro-kicker{color:var(--green);font-family:ui-monospace,monospace;font-size:12px;letter-spacing:2px;text-transform:uppercase;margin-bottom:12px}
+    .phase-intro h2{font-size:clamp(36px,8vw,78px);line-height:.95;margin:0 0 16px;color:#fff4e4;text-transform:uppercase}
+    .phase-intro p{font-family:ui-monospace,monospace;color:var(--muted);font-size:15px;line-height:1.5;margin:0 auto;max-width:640px}
+    @keyframes phasePop{from{transform:scale(.9);opacity:0}to{transform:scale(1);opacity:1}}
+  `;
+  document.head.appendChild(style);
+}
+
+function showPhaseIntro(key, title, text) {
+  if (!key || lastPhaseIntroKey === key) return;
+  lastPhaseIntroKey = key;
+  const overlay = $('#phaseIntroOverlay');
+  if (!overlay) return;
+  const titleEl = $('#phaseIntroTitle');
+  const textEl = $('#phaseIntroText');
+  if (titleEl) titleEl.textContent = title;
+  if (textEl) textEl.textContent = text;
+  overlay.hidden = false;
+  clearTimeout(showPhaseIntro.timer);
+  showPhaseIntro.timer = setTimeout(() => { overlay.hidden = true; }, 2100);
+}
+
+function updateLobbyControls(room) {
+  const start = $('#startRoundBtn');
+  const note = document.querySelector('.players-section .tiny-note');
+  const me = myPlayer(room);
+  const playerCount = room?.players?.length || room?.totalPlayers || 0;
+  const isHost = !!me?.isHost;
+
+  if (note) note.textContent = 'Awards Mode needs an even number of players. Max 10 players. Host starts the round.';
+  if (!start) return;
+
+  start.hidden = !isHost;
+  if (!isHost) return;
+
+  const hasEnough = playerCount >= 2;
+  const isEven = playerCount % 2 === 0;
+  start.disabled = !(hasEnough && isEven);
+  if (!hasEnough) start.textContent = 'NEED 2 PLAYERS';
+  else if (!isEven) start.textContent = 'NEED EVEN PLAYERS';
+  else start.textContent = 'START ROUND';
+}
+
+function leaveRoom() {
+  socket.emit('room:leave');
+  currentRoom = null;
+  currentPromptVotingPayload = null;
+  currentPerformanceVotingPayload = null;
+  currentResultsPayload = null;
+  selectedLineId = null;
+  selectedScenarioId = null;
+  lastPhaseIntroKey = null;
+  showScreen('playScreen');
+  socket.emit('quick:list');
 }
 
 function injectAwardsScreens() {
@@ -507,13 +584,29 @@ function renderRoom(room) {
   if ($('#activePlayers')) $('#activePlayers').textContent = String(room.totalPlayers || room.players?.length || 0).padStart(3, '0');
   if ($('#roomLink')) $('#roomLink').value = `${location.origin}${location.pathname}?room=${room.code}`;
   renderPlayers(room.players || []);
+  updateLobbyControls(room);
 
   if (room.status === 'lobby') showScreen('lobbyScreen');
-  if (room.status === 'writing') renderWriting(room);
-  if (room.status === 'promptVoting') renderPromptVoting(room, currentPromptVotingPayload);
-  if (room.status === 'recording') renderRecording(room);
-  if (room.status === 'performanceVoting') renderClipVoting(currentPerformanceVotingPayload);
-  if (room.status === 'results') renderResults(currentResultsPayload || { prompt: room.prompt, awards: room.awards, clips: [] });
+  if (room.status === 'writing') {
+    renderWriting(room);
+    showPhaseIntro(`writing-${room.round}`, 'WRITE THE NOMINEES', 'Half the players write short lines. The other half write scenarios that complete Say it like...');
+  }
+  if (room.status === 'promptVoting') {
+    renderPromptVoting(room, currentPromptVotingPayload);
+    showPhaseIntro(`promptVoting-${room.round}`, 'VOTE THE PROMPT', 'Vote for Best Line and Best Scenario. The winners combine into the final performance prompt.');
+  }
+  if (room.status === 'recording') {
+    renderRecording(room);
+    showPhaseIntro(`recording-${room.round}`, 'PERFORM', 'Record your best version of the winning prompt. Commit to it. You get one performance.');
+  }
+  if (room.status === 'performanceVoting') {
+    renderClipVoting(currentPerformanceVotingPayload);
+    showPhaseIntro(`performanceVoting-${room.round}`, 'VOTE PERFORMANCE', 'Listen anonymously and vote for the strongest performance. This award pays the most Bucks.');
+  }
+  if (room.status === 'results') {
+    renderResults(currentResultsPayload || { prompt: room.prompt, awards: room.awards, clips: [] });
+    showPhaseIntro(`results-${room.round}`, 'AWARDS CEREMONY', 'Best Performance pays 100 Bucks. Best Line and Best Scenario pay 50 Bucks each.');
+  }
 }
 
 async function startRecording() {
@@ -611,8 +704,8 @@ function setupEvents() {
   $('#joinRoomBtn')?.addEventListener('click', () => { if (requireLoginToPlay()) socket.emit('custom:join', { name: getName(), code: $('#roomCodeInput')?.value }); });
   $('#copyRoomBtn')?.addEventListener('click', () => copyText($('#roomLink')?.value || ''));
   $('#startRoundBtn')?.addEventListener('click', () => socket.emit('round:start'));
-  $('#leaveLobbyBtn')?.addEventListener('click', () => socket.emit('room:leave'));
-  $('#leaveLobbyBtn2')?.addEventListener('click', () => socket.emit('room:leave'));
+  $('#leaveLobbyBtn')?.addEventListener('click', leaveRoom);
+  $('#leaveLobbyBtn2')?.addEventListener('click', leaveRoom);
   $('#backToLobbyBtn')?.addEventListener('click', () => showScreen('lobbyScreen'));
   $('#playAgainBtn')?.addEventListener('click', () => socket.emit('round:start'));
   $('#recordBtn')?.addEventListener('click', startRecording);
@@ -631,6 +724,7 @@ function setupEvents() {
   socket.on('quick:list', renderQuickRooms);
   socket.on('leaderboard:update', renderLeaderboard);
   socket.on('room:joined', () => showScreen('lobbyScreen'));
+  socket.on('room:left', () => showScreen('playScreen'));
   socket.on('room:update', renderRoom);
   socket.on('round:writing', () => { selectedLineId = null; selectedScenarioId = null; });
   socket.on('prompt:submitted', () => {
@@ -675,7 +769,7 @@ function initCopy() {
       <div class="section"><h3>1. WRITE</h3><p>Half the players write lines. Half write scenarios that complete <strong>Say it like...</strong></p></div>
       <div class="section"><h3>2. VOTE THE PROMPT</h3><p>Everyone votes for Best Line and Best Scenario. The winners combine into the final prompt.</p></div>
       <div class="section"><h3>3. PERFORM</h3><p>Everyone records the same winning prompt.</p></div>
-      <div class="section"><h3>4. AWARDS</h3><p>Best Line, Best Scenario, and Best Performance are revealed like a ridiculous award show.</p></div>`;
+      <div class="section"><h3>4. AWARDS</h3><p>Best Performance pays 100 Bucks. Best Line and Best Scenario pay 50 Bucks each.</p></div>`;
   }
   const roundScenarioLabel = $('#roundStyle')?.previousElementSibling;
   if (roundScenarioLabel) roundScenarioLabel.textContent = 'SCENARIO';
@@ -693,6 +787,7 @@ function initCopy() {
 
 document.addEventListener('DOMContentLoaded', () => {
   injectAwardsScreens();
+  injectPhaseIntro();
   initCopy();
   setVolumeUI();
   setNameFromStorage();
