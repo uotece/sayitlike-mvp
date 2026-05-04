@@ -408,5 +408,5 @@ io.on('connection', (socket) => {
 });
 
 server.listen(PORT, () => {
-  console.log(`SayItLike MVP running on http://localhost:${PORT}`);
+  console.log(`SayItLike running on port ${PORT}`);
 });
