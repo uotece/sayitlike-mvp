@@ -144,6 +144,17 @@ function renderPlayers(players = []) {
   });
 }
 
+function myPlayer(room = currentRoom) {
+  return room?.players?.find((player) => player.id === myId) || null;
+}
+
+function lockRecorderAfterSubmit() {
+  $('#recordBtn').disabled = true;
+  $('#stopBtn').disabled = true;
+  $('#submitClipBtn').disabled = true;
+  $('#clipStatus').textContent = 'Submitted. Waiting for the other players.';
+}
+
 function escapeHtml(str) {
   return String(str).replace(/[&<>'"]/g, (ch) => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#039;', '"': '&quot;'
@@ -199,7 +210,10 @@ function renderLeaderboard(list = leaderboard) {
 }
 
 function renderRoom(room) {
+  const previousStatus = currentRoom?.status;
+  const previousRound = currentRoom?.round;
   currentRoom = room;
+
   $('#activePlayers').textContent = String(room.totalPlayers || room.players?.length || 0).padStart(3, '0');
   $('#roomCodeDisplay').textContent = room.code || '-----';
   $('#lobbyMode').textContent = room.isQuick ? 'QUICK BATTLE' : 'CUSTOM';
@@ -213,18 +227,41 @@ function renderRoom(room) {
   $('#startRoundBtn').disabled = !amHost || room.status !== 'lobby';
   $('#playAgainBtn').disabled = !amHost;
 
-  if (room.status === 'lobby') showScreen('lobbyScreen');
+  if (room.status === 'lobby') {
+    activePhaseKey = null;
+    clearInterval(tickTimer);
+    showScreen('lobbyScreen');
+  }
+
   if (room.status === 'recording') {
     $('#roundLine').textContent = room.prompt?.line || '—';
     $('#roundStyle').textContent = room.prompt?.style || '—';
-    updateTimer(room.phaseStartedAt, room.phaseDuration, 'recordTimer');
-    resetRecorderUI(false);
+
+    const phaseKey = `${room.code}:${room.round}:recording`;
+    if (activePhaseKey !== phaseKey || previousStatus !== 'recording' || previousRound !== room.round) {
+      activePhaseKey = phaseKey;
+      recordedBlob = null;
+      resetRecorderUI(true);
+      updateTimer(room.remainingSeconds ?? room.phaseDuration ?? 60, 'recordTimer');
+    }
+
+    if (myPlayer(room)?.submitted) lockRecorderAfterSubmit();
     showScreen('recordScreen');
   }
+
   if (room.status === 'voting') {
-    updateTimer(room.phaseStartedAt, room.phaseDuration, 'voteTimer');
+    const phaseKey = `${room.code}:${room.round}:voting`;
+    if (activePhaseKey !== phaseKey || previousStatus !== 'voting' || previousRound !== room.round) {
+      activePhaseKey = phaseKey;
+      updateTimer(room.remainingSeconds ?? room.phaseDuration ?? 60, 'voteTimer');
+    }
   }
-  if (room.status === 'results') showScreen('resultsScreen');
+
+  if (room.status === 'results') {
+    activePhaseKey = null;
+    clearInterval(tickTimer);
+    showScreen('resultsScreen');
+  }
 }
 
 function resetRecorderUI(clearBlob = true) {
@@ -287,7 +324,8 @@ async function startRecording() {
     $('#clipStatus').textContent = 'Recording... max 10 seconds.';
     recordStopTimer = setTimeout(stopRecording, 10000);
   } catch (err) {
-    showToast('Microphone permission failed. Allow microphone access and try again.', true);
+    console.error('Recording failed:', err);
+    showToast('Recording failed. Check the browser console for details.', true);
   }
 }
 
