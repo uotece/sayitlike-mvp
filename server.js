@@ -19,6 +19,8 @@ const PROMPT_VOTING_SECONDS = 25;
 const RECORDING_SECONDS = 35;
 const PERFORMANCE_VOTING_SECONDS = 45;
 const RESULTS_SECONDS = 30;
+const PHASE_INTRO_SECONDS = 7.6;
+const RESULTS_INTRO_SECONDS = 2.6;
 const MAX_CLIP_BYTES = 1_400_000;
 const LEADERBOARD_LIMIT = 25;
 
@@ -254,21 +256,28 @@ function clearPhaseTimer(room) {
 }
 
 function phasePayload(room) {
+  const now = Date.now();
+  const introEndsAt = room.introEndsAt || room.phaseStartedAt || null;
+  const timerReference = introEndsAt && now < introEndsAt ? introEndsAt : now;
   return {
     endsAt: room.endsAt,
+    introEndsAt,
     phaseStartedAt: room.phaseStartedAt,
     phaseDuration: room.phaseDuration,
-    remainingSeconds: room.endsAt ? Math.max(0, Math.ceil((room.endsAt - Date.now()) / 1000)) : null
+    introRemainingSeconds: introEndsAt ? Math.max(0, Math.ceil((introEndsAt - now) / 1000)) : 0,
+    remainingSeconds: room.endsAt ? Math.max(0, Math.ceil((room.endsAt - timerReference) / 1000)) : null
   };
 }
 
-function beginTimedPhase(room, status, seconds, callback) {
+function beginTimedPhase(room, status, seconds, callback, introSeconds = 0) {
   clearPhaseTimer(room);
   room.status = status;
   room.phaseStartedAt = Date.now();
   room.phaseDuration = seconds;
-  room.endsAt = room.phaseStartedAt + seconds * 1000;
-  room.timers.phase = setTimeout(() => callback(room), seconds * 1000);
+  room.introSeconds = introSeconds;
+  room.introEndsAt = room.phaseStartedAt + introSeconds * 1000;
+  room.endsAt = room.phaseStartedAt + (introSeconds + seconds) * 1000;
+  room.timers.phase = setTimeout(() => callback(room), (introSeconds + seconds) * 1000);
 }
 
 
@@ -480,7 +489,7 @@ function startRound(room) {
     player.voted = false;
   });
 
-  beginTimedPhase(room, 'writing', WRITING_SECONDS, endWriting);
+  beginTimedPhase(room, 'writing', WRITING_SECONDS, endWriting, PHASE_INTRO_SECONDS);
   emitRoom(room);
   emitQuickRooms();
 
@@ -519,7 +528,7 @@ function endWriting(room) {
   room.promptVotes.clear();
   for (const player of activePlayers(room)) player.voted = false;
 
-  beginTimedPhase(room, 'promptVoting', PROMPT_VOTING_SECONDS, endPromptVoting);
+  beginTimedPhase(room, 'promptVoting', PROMPT_VOTING_SECONDS, endPromptVoting, PHASE_INTRO_SECONDS);
   emitRoom(room);
   io.to(room.code).emit('round:prompt-voting', { lines, scenarios, ...phasePayload(room) });
 }
@@ -569,7 +578,7 @@ function endPromptVoting(room) {
     player.voted = false;
   }
 
-  beginTimedPhase(room, 'recording', RECORDING_SECONDS, endRecording);
+  beginTimedPhase(room, 'recording', RECORDING_SECONDS, endRecording, PHASE_INTRO_SECONDS);
   emitRoom(room);
   io.to(room.code).emit('round:recording', { prompt: room.prompt, ...phasePayload(room) });
 }
@@ -596,7 +605,7 @@ function endRecording(room) {
   }
 
   for (const player of activePlayers(room)) player.voted = false;
-  beginTimedPhase(room, 'performanceVoting', PERFORMANCE_VOTING_SECONDS, endPerformanceVoting);
+  beginTimedPhase(room, 'performanceVoting', PERFORMANCE_VOTING_SECONDS, endPerformanceVoting, PHASE_INTRO_SECONDS);
 
   const clips = [...room.clips.values()].map((clip, index) => ({
     clipId: clip.clipId,
@@ -628,7 +637,7 @@ function maybeEndPerformanceVoting(room) {
 
 function endPerformanceVoting(room) {
   if (room.status !== 'performanceVoting') return;
-  beginTimedPhase(room, 'results', RESULTS_SECONDS, endResults);
+  beginTimedPhase(room, 'results', RESULTS_SECONDS, endResults, RESULTS_INTRO_SECONDS);
 
   const tally = new Map();
   for (const clip of room.clips.values()) tally.set(clip.clipId, 0);
@@ -722,6 +731,7 @@ function endResults(room) {
   room.endsAt = null;
   room.phaseStartedAt = null;
   room.phaseDuration = null;
+  room.introEndsAt = null;
   room.assignments.clear();
   room.submissions.clear();
   room.promptVotes.clear();

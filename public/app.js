@@ -25,6 +25,8 @@ let selectedScenarioId = null;
 let phaseIntroShown = new Set();
 let localResultsDone = false;
 let lastRecordingResetKey = null;
+let previewAudioUrl = null;
+let localAwardAppliedKey = null;
 
 function getAudioContext() {
   if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -164,6 +166,37 @@ function createThemedAudioPlayer(src) {
 
   wrap.append(play, progress, time, audio);
   return wrap;
+}
+
+function ensurePreviewAudioSlot() {
+  let slot = $('#previewAudioSlot');
+  if (slot) return slot;
+  const nativePreview = $('#previewAudio');
+  if (!nativePreview) return null;
+  slot = document.createElement('div');
+  slot.id = 'previewAudioSlot';
+  slot.className = 'themed-audio-slot preview-audio-slot';
+  nativePreview.insertAdjacentElement('afterend', slot);
+  nativePreview.hidden = true;
+  return slot;
+}
+
+function renderPreviewAudio(src = '') {
+  const nativePreview = $('#previewAudio');
+  if (nativePreview) {
+    nativePreview.pause?.();
+    nativePreview.removeAttribute('src');
+    nativePreview.load?.();
+    nativePreview.hidden = true;
+  }
+  const slot = ensurePreviewAudioSlot();
+  if (!slot) return;
+  slot.innerHTML = '';
+  if (previewAudioUrl && previewAudioUrl.startsWith('blob:') && previewAudioUrl !== src) {
+    try { URL.revokeObjectURL(previewAudioUrl); } catch {}
+  }
+  previewAudioUrl = src || null;
+  if (src) slot.appendChild(createThemedAudioPlayer(src));
 }
 
 function myPlayer(room = currentRoom) {
@@ -313,6 +346,11 @@ function updateTimer(remainingSeconds, elementId) {
   clearInterval(tickTimer);
   const el = document.getElementById(elementId);
   if (remainingSeconds == null || !el) return;
+  const overlay = $('#phaseIntroOverlay');
+  if (overlay && !overlay.hidden) {
+    el.textContent = String(Math.max(0, Math.ceil(Number(remainingSeconds)))).padStart(2, '0');
+    return;
+  }
   const end = Date.now() + Math.max(0, Number(remainingSeconds)) * 1000;
   const tick = () => {
     const remaining = Math.max(0, Math.ceil((end - Date.now()) / 1000));
@@ -351,7 +389,7 @@ function injectPhaseIntro() {
   document.head.appendChild(style);
 }
 
-function showPhaseIntro(key, kicker, title, text, duration = 8600) {
+function showPhaseIntro(key, kicker, title, text, duration = 7600) {
   if (!key || phaseIntroShown.has(key)) return;
   phaseIntroShown.add(key);
   const overlay = $('#phaseIntroOverlay');
@@ -363,8 +401,12 @@ function showPhaseIntro(key, kicker, title, text, duration = 8600) {
   if (titleEl) titleEl.textContent = title;
   if (textEl) textEl.textContent = text;
   overlay.hidden = false;
+  clearInterval(tickTimer);
   clearTimeout(showPhaseIntro.timer);
-  showPhaseIntro.timer = setTimeout(() => { overlay.hidden = true; }, duration);
+  showPhaseIntro.timer = setTimeout(() => {
+    overlay.hidden = true;
+    if (currentRoom) renderRoom(currentRoom);
+  }, duration);
 }
 
 function updateLobbyControls(room) {
@@ -433,13 +475,7 @@ function stopActiveRecorder() {
 function resetRecorderUI() {
   stopActiveRecorder();
   recordedBlob = null;
-  const preview = $('#previewAudio');
-  if (preview) {
-    try { if (preview.src && preview.src.startsWith('blob:')) URL.revokeObjectURL(preview.src); } catch {}
-    preview.removeAttribute('src');
-    preview.load?.();
-    preview.hidden = true;
-  }
+  renderPreviewAudio('');
   const recordBtn = $('#recordBtn');
   const stopBtn = $('#stopBtn');
   const submitBtn = $('#submitClipBtn');
@@ -458,6 +494,7 @@ function resetLocalRoundState() {
   selectedScenarioId = null;
   lastRecordingResetKey = null;
   localResultsDone = false;
+  localAwardAppliedKey = null;
   resetRecorderUI();
   const clipList = $('#clipList');
   if (clipList) clipList.innerHTML = '';
@@ -525,7 +562,7 @@ function injectAwardsScreens() {
   const style = document.createElement('style');
   style.id = 'awardsModeStyles';
   style.textContent = `
-    .prompt-input{width:100%;min-height:110px;background:#140a24;color:#fff4e4;border:2px solid var(--purple);border-radius:12px;padding:14px;font-family:ui-monospace,monospace;font-size:14px;resize:vertical;box-sizing:border-box;text-transform:none}
+    #startRoundBtn{display:none}.modal-title{padding-right:130px}.timer{position:relative;z-index:2}#writingScreen .modal-title,#promptVoteScreen .modal-title,#votingScreen .modal-title{font-size:clamp(24px,4.4vw,48px);line-height:.95}.prompt-input{width:100%;min-height:110px;background:#140a24;color:#fff4e4;border:2px solid var(--purple);border-radius:12px;padding:14px;font-family:ui-monospace,monospace;font-size:14px;resize:vertical;box-sizing:border-box;text-transform:none}
     .awards-vote-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
     .option-list{display:grid;gap:10px}
     .option-card{display:block;width:100%;text-align:left;background:#140a24;color:#fff4e4;border:2px solid #3f1d70;border-radius:14px;padding:12px;cursor:pointer;font-family:ui-monospace,monospace;text-transform:none}
@@ -542,15 +579,15 @@ function injectAwardsScreens() {
     #votingScreen .modal-title{font-size:clamp(30px,5vw,58px);line-height:.96}
     .clip-card{background:#10091d;border:2px solid #3f1d70;border-radius:14px;padding:16px;margin:14px 0;box-shadow:0 0 0 1px rgba(124,58,237,.12)}
     .clip-title{color:#fff4e4;margin-bottom:10px;letter-spacing:.5px}
-    .clip-card .vote-btn{margin-top:10px}
-    .themed-audio{display:grid;grid-template-columns:48px 1fr 118px;gap:12px;align-items:center;width:100%;padding:12px;background:#070a18;border:1px solid rgba(45,212,191,.25);box-shadow:inset 0 0 20px rgba(45,212,191,.05)}
+    .clip-card .vote-btn{margin-top:10px}.own-clip-note{margin-top:10px;color:var(--muted);font-size:9px;text-transform:uppercase}
+    .preview-audio-slot{margin-top:12px}.themed-audio{display:grid;grid-template-columns:48px 1fr 118px;gap:12px;align-items:center;width:100%;padding:12px;background:#070a18;border:1px solid rgba(45,212,191,.25);box-shadow:inset 0 0 20px rgba(45,212,191,.05)}
     .themed-audio audio{display:none}
     .audio-play-btn{height:38px;width:42px;border:1px solid var(--green);background:#111827;color:#fff4e4;cursor:pointer;font-family:inherit;font-size:12px;box-shadow:0 0 12px rgba(45,212,191,.12)}
     .audio-play-btn:hover{background:#172033;color:var(--green)}
-    .audio-progress{-webkit-appearance:none;appearance:none;width:100%;height:14px;background:#050816;border:1px solid rgba(139,92,246,.35);cursor:pointer}
-    .audio-progress::-webkit-slider-runnable-track{height:14px;background:linear-gradient(90deg,rgba(45,212,191,.92),rgba(139,92,246,.92));box-shadow:inset 0 0 0 1px rgba(255,255,255,.06)}
+    .audio-progress{-webkit-appearance:none!important;appearance:none!important;width:100%;height:16px;background:#050816!important;border:1px solid rgba(139,92,246,.35);cursor:pointer;border-radius:0!important;padding:0!important;accent-color:var(--green)}
+    .audio-progress::-webkit-slider-runnable-track{height:16px;background:linear-gradient(90deg,rgba(45,212,191,.92),rgba(139,92,246,.92));box-shadow:inset 0 0 0 1px rgba(255,255,255,.06)}
     .audio-progress::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:16px;height:26px;margin-top:-6px;background:#fff4e4;border:2px solid var(--green);box-shadow:3px 3px 0 #050816}
-    .audio-progress::-moz-range-track{height:14px;background:linear-gradient(90deg,rgba(45,212,191,.92),rgba(139,92,246,.92));border:1px solid rgba(255,255,255,.06)}
+    .audio-progress::-moz-range-track{height:16px;background:linear-gradient(90deg,rgba(45,212,191,.92),rgba(139,92,246,.92));border:1px solid rgba(255,255,255,.06)}
     .audio-progress::-moz-range-thumb{width:16px;height:26px;background:#fff4e4;border:2px solid var(--green);border-radius:0}
     .audio-time{font-family:ui-monospace,monospace;font-size:12px;color:var(--muted);white-space:nowrap;text-align:right}
     .shop-grid{display:grid;gap:16px}.shop-row{border:1px solid rgba(139,92,246,.22);background:rgba(7,10,24,.62);padding:16px}.shop-cards{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.shop-item{border:1px solid rgba(45,212,191,.24);background:#0a1020;padding:14px;min-height:96px}.shop-item strong{display:block;font-size:18px;color:#fff4e4;margin-bottom:9px}.shop-item small{display:block;color:var(--muted);font-size:8px}.shop-price{color:var(--green);font-size:11px;margin-top:10px}.shop-locked{margin-top:10px;border:1px solid rgba(255,255,255,.1);padding:8px;text-align:center;color:var(--muted);font-size:8px}
@@ -741,13 +778,33 @@ function renderClipVoting(payload = currentPerformanceVotingPayload) {
     card.innerHTML = `
       <div class="clip-title">PERFORMANCE ${escapeHtml(clip.label)}${isOwn ? ' • YOURS' : ''}</div>
       <div class="themed-audio-slot"></div>
-      <button class="pixel-btn vote-btn" ${isOwn ? 'disabled' : ''}>VOTE BEST PERFORMANCE</button>`;
+      ${isOwn ? '<div class="own-clip-note">YOU CANNOT VOTE FOR YOURSELF</div>' : '<button class="pixel-btn vote-btn">VOTE BEST PERFORMANCE</button>'}`;
     card.querySelector('.themed-audio-slot')?.appendChild(createThemedAudioPlayer(clip.audioData));
-    card.querySelector('.vote-btn')?.addEventListener('click', () => socket.emit('vote:submit', { clipId: clip.clipId }));
+    if (!isOwn) card.querySelector('.vote-btn')?.addEventListener('click', () => socket.emit('vote:submit', { clipId: clip.clipId }));
     list.appendChild(card);
   });
   const voted = $('#votedCount');
   if (voted && currentRoom) voted.textContent = currentRoom.votedCount || 0;
+}
+
+
+function applyLocalAwardBucks(payload) {
+  if (!authUser || !payload?.awards || !currentRoom) return;
+  const player = myPlayer(currentRoom);
+  if (!player || player.waiting) return;
+  const key = `${currentRoom.code || 'room'}-${currentRoom.round || 'round'}`;
+  if (localAwardAppliedKey === key) return;
+  localAwardAppliedKey = key;
+  let earned = 0;
+  const awards = payload.awards;
+  if (awards.bestPerformance?.winnerId === myId) earned += awards.bestPerformance.bucks || 100;
+  if (awards.bestLine?.winnerId === myId) earned += awards.bestLine.bucks || 50;
+  if (awards.bestScenario?.winnerId === myId) earned += awards.bestScenario.bucks || 50;
+  authUser.wins = (authUser.wins || 0) + earned;
+  authUser.gamesPlayed = (authUser.gamesPlayed || 0) + 1;
+  renderAuthUI();
+  const shopBucks = $('#shopBucks');
+  if (shopBucks) shopBucks.textContent = `${authUser.wins || 0} B`;
 }
 
 function renderResults(payload = currentResultsPayload) {
@@ -765,6 +822,8 @@ function renderResults(payload = currentResultsPayload) {
   const performanceBucks = bestPerformance.bucks || 100;
   const lineBucks = bestLine.bucks || 50;
   const scenarioBucks = bestScenario.bucks || 50;
+
+  applyLocalAwardBucks(payload);
 
   list.innerHTML = `
     <div class="award-card main-award"><div class="award-title">THE BIG AWARD • BEST PERFORMANCE</div><div class="award-value">${escapeHtml(bestPerformance.winnerName || 'Nobody')}</div><div class="award-winner">${bestPerformance.clipId ? `${bestPerformance.votes || 0} votes` : 'No winning clip'}</div><div class="award-bucks">+${performanceBucks} BUCKS</div></div>
@@ -815,19 +874,19 @@ function renderRoom(room) {
   if (room.status === 'writing') {
     renderWriting(room);
     const writingRole = myPlayer(room)?.role === 'scenario' ? 'WRITE A SCENARIO' : 'WRITE A LINE';
-    showPhaseIntro(`writing-${room.round}`, 'FIRST PHASE', writingRole, 'Half the players in the room write short lines. The other half write scenarios.', 8600);
+    showPhaseIntro(`writing-${room.round}`, 'FIRST PHASE', writingRole, 'Half the players in the room write short lines. The other half write scenarios.', 7600);
   }
   if (room.status === 'promptVoting') {
     renderPromptVoting(room, currentPromptVotingPayload);
-    showPhaseIntro(`promptVoting-${room.round}`, 'NEXT PHASE', 'VOTE FOR THE BEST LINE AND SCENARIO', 'The most voted line and scenario will be performed by everyone.', 8600);
+    showPhaseIntro(`promptVoting-${room.round}`, 'NEXT PHASE', 'VOTE FOR THE BEST LINE AND SCENARIO', 'The most voted line and scenario will be performed by everyone.', 7600);
   }
   if (room.status === 'recording') {
     renderRecording(room);
-    showPhaseIntro(`recording-${room.round}`, 'NEXT PHASE', 'PERFORM', 'Record your best version of the winning prompt. Commit to it. You get one performance.', 8600);
+    showPhaseIntro(`recording-${room.round}`, 'NEXT PHASE', 'PERFORM', 'Record your best version of the winning prompt. Commit to it. You get one performance.', 7600);
   }
   if (room.status === 'performanceVoting') {
     renderClipVoting(currentPerformanceVotingPayload);
-    showPhaseIntro(`performanceVoting-${room.round}`, 'LAST PHASE', 'VOTE BEST PERFORMANCE', 'Listen and vote for the strongest performance. You cannot vote on yourself. This award pays the most Bucks.', 8600);
+    showPhaseIntro(`performanceVoting-${room.round}`, 'LAST PHASE', 'VOTE BEST PERFORMANCE', 'Listen and vote for the strongest performance. You cannot vote on yourself. This award pays the most Bucks.', 7600);
   }
   if (room.status === 'results') {
     const resultsPayload = { ...(currentResultsPayload || {}), prompt: room.prompt || currentResultsPayload?.prompt, awards: room.awards || currentResultsPayload?.awards, clips: currentResultsPayload?.clips || [], remainingSeconds: room.remainingSeconds };
@@ -837,7 +896,7 @@ function renderRoom(room) {
       updateLobbyControls(room);
     } else {
       renderResults(resultsPayload);
-      showPhaseIntro(`results-${room.round}`, 'AWARDS', 'AWARDS CEREMONY', 'The winners are about to be revealed. Best Performance pays the most.', 3600);
+      showPhaseIntro(`results-${room.round}`, 'AWARDS', 'AWARDS CEREMONY', 'The winners are about to be revealed. Best Performance pays the most.', 2600);
     }
   }
 }
@@ -845,18 +904,14 @@ function renderRoom(room) {
 async function startRecording() {
   try {
     recordedBlob = null;
-    const preview = $('#previewAudio');
-    if (preview) preview.hidden = true;
+    renderPreviewAudio('');
     mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
     mediaRecorder = new MediaRecorder(mediaStream);
     const chunks = [];
     mediaRecorder.ondataavailable = (event) => { if (event.data?.size) chunks.push(event.data); };
     mediaRecorder.onstop = () => {
       recordedBlob = new Blob(chunks, { type: mediaRecorder.mimeType || 'audio/webm' });
-      if (preview) {
-        preview.src = URL.createObjectURL(recordedBlob);
-        preview.hidden = false;
-      }
+      renderPreviewAudio(URL.createObjectURL(recordedBlob));
       if ($('#submitClipBtn')) $('#submitClipBtn').disabled = false;
       if ($('#clipStatus')) $('#clipStatus').textContent = 'Preview your clip, then submit.';
       mediaStream?.getTracks().forEach((track) => track.stop());
@@ -1063,6 +1118,16 @@ function initCopy() {
       <div class="section"><h3>3. PERFORM</h3><p>Everyone records the same winning prompt.</p></div>
       <div class="section"><h3>4. AWARDS</h3><p>Best Performance pays 100 Bucks. Best Line and Best Scenario pay 50 Bucks each.</p></div>`;
   }
+
+  document.querySelectorAll('.footer-links a, .footer-links button').forEach((link) => {
+    if (link.textContent.trim().toUpperCase() === 'HOW TO PLAY') {
+      link.addEventListener('click', (event) => {
+        event.preventDefault();
+        showScreen('howScreen');
+      });
+    }
+  });
+
   const roundScenarioLabel = $('#roundStyle')?.previousElementSibling;
   if (roundScenarioLabel) roundScenarioLabel.textContent = 'SCENARIO';
   const voteScenarioLabel = $('#voteStyle')?.previousElementSibling;
