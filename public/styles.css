@@ -94,3 +94,167 @@ a{color:inherit;text-decoration:none}button,input{font-family:inherit}button{use
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+
+/* v0.4.3 responsive account controls */
+@media(max-width:900px){
+  .account-card{
+    display:block !important;
+    right:12px;
+    top:12px;
+    width:168px;
+    padding:9px;
+    transform-origin:top right;
+    transform:scale(.82);
+  }
+
+  .audio-ui{
+    display:block !important;
+    right:158px;
+    top:18px;
+    transform-origin:top right;
+    transform:scale(.82);
+  }
+
+  .account-top{
+    grid-template-columns:34px 1fr 10px;
+    gap:7px;
+  }
+
+  .discord-pixel{
+    width:34px;
+    height:34px;
+  }
+
+  .account-name{
+    max-width:96px;
+    font-size:14px;
+  }
+
+  .account-label,
+  .account-stats .label{
+    font-size:6px;
+  }
+
+  .account-stats .money,
+  .account-stats .level{
+    font-size:14px;
+  }
+
+  .center-stack{
+    padding-top:88px;
+  }
+}
+
+@media(max-width:520px){
+  .account-card{
+    right:6px;
+    top:8px;
+    transform:scale(.70);
+  }
+
+  .audio-ui{
+    right:116px;
+    top:12px;
+    transform:scale(.70);
+  }
+
+  .center-stack{
+    padding-top:96px;
+  }
+}
+
+/* v0.4.3 patch notes + credits */
+.patch-modal{width:min(760px,92vw)}
+.patch-inner{max-height:calc(100vh - 170px)}
+.patch-card{
+  background:rgba(2,4,12,.52);
+  border-top:1px solid rgba(139,92,246,.14);
+  padding:18px 16px 20px;
+  margin:0 0 18px;
+}
+.patch-card h3{
+  margin:0 0 6px;
+  font-size:28px;
+  color:#fff;
+  text-shadow:4px 4px 0 #111827;
+}
+.patch-card h4{
+  margin:0 0 12px;
+  font-size:18px;
+  line-height:1.25;
+  color:#fff;
+  text-shadow:3px 3px 0 #111827;
+}
+.patch-card time{
+  display:block;
+  margin-bottom:12px;
+  font-size:8px;
+  color:var(--muted);
+}
+.patch-card p{
+  margin:0 0 10px;
+  font-family:ui-monospace,monospace;
+  font-size:12px;
+  line-height:1.45;
+  color:#dbe4f0;
+  letter-spacing:0;
+  text-transform:none;
+}
+.patch-grid{
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:32px;
+  margin-top:22px;
+}
+.patch-grid h5{
+  margin:0 0 12px;
+  font-size:18px;
+  color:var(--red);
+  text-shadow:3px 3px 0 #111827;
+}
+
+.credits-modal{width:min(680px,92vw)}
+.credits-list{display:grid;gap:14px;margin-top:24px}
+.credit-row{
+  display:grid;
+  grid-template-columns:52px 1fr;
+  align-items:center;
+  gap:14px;
+  padding:14px;
+  background:rgba(2,4,12,.52);
+  border:1px solid rgba(139,92,246,.14);
+}
+.credit-avatar{
+  width:42px;
+  height:42px;
+  display:grid;
+  place-items:center;
+  border:2px solid var(--red);
+  background:rgba(139,92,246,.12);
+  font-size:18px;
+}
+.credit-row strong{
+  display:block;
+  font-size:18px;
+  color:#fff;
+  text-shadow:3px 3px 0 #111827;
+}
+.credit-row span{
+  display:block;
+  margin-top:6px;
+  font-size:8px;
+  color:var(--muted);
+}
+
+.donate-link{
+  text-decoration:none;
+  text-align:center;
+}
+
+@media(max-width:700px){
+  .patch-grid{grid-template-columns:1fr;gap:12px}
+  .patch-card h3{font-size:22px}
+  .patch-card h4{font-size:14px}
+  .credit-row strong{font-size:14px}
+}

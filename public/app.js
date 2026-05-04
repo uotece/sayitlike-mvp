@@ -32,7 +32,9 @@ const screens = {
   how: $('#howScreen'),
   hall: $('#hallScreen'),
   account: $('#accountScreen'),
-  donate: $('#donateScreen')
+  donate: $('#donateScreen'),
+  patch: $('#patchScreen'),
+  credits: $('#creditsScreen')
 };
 
 const screenIds = new Set(Object.values(screens).map((el) => el.id));
@@ -222,7 +224,6 @@ async function signup() {
     const email = $('#authEmail').value.trim();
     const username = $('#authUsername').value.trim();
     const password = $('#authPassword').value;
-    if (username) localStorage.setItem('sayitlike_last_username', username);
 
     const credential = await firebaseAuth.createUserWithEmailAndPassword(email, password);
     await credential.user.updateProfile({ displayName: username });
@@ -243,7 +244,6 @@ async function login() {
     const email = $('#authEmail').value.trim();
     const username = $('#authUsername').value.trim();
     const password = $('#authPassword').value;
-    if (username) localStorage.setItem('sayitlike_last_username', username);
 
     const credential = await firebaseAuth.signInWithEmailAndPassword(email, password);
     const idToken = await credential.user.getIdToken(true);
@@ -620,8 +620,7 @@ function initEvents() {
   $('#signupBtn').addEventListener('click', signup);
   $('#loginBtn').addEventListener('click', login);
   $('#logoutBtn').addEventListener('click', logout);
-  const lastUsername = localStorage.getItem('sayitlike_last_username');
-  if (lastUsername) $('#authUsername').value = lastUsername;
+  localStorage.removeItem('sayitlike_last_username');
 
   $('#authPassword').addEventListener('keydown', (event) => {
     if (event.key === 'Enter') login();

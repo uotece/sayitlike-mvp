@@ -278,6 +278,84 @@
         </div>
       </section>
 
+
+      <section class="modal-wrap screen" id="patchScreen">
+        <div class="modal patch-modal">
+          <button class="modal-close back-btn" data-screen="homeScreen">X</button>
+          <div class="modal-inner patch-inner">
+            <h2 class="modal-title">PATCH NOTES</h2>
+            <div class="modal-kicker">CHANGES MADE IN EACH UPDATE.</div>
+
+            <article class="patch-card">
+              <h3>0.4.3</h3>
+              <h4>RESPONSIVE ACCOUNT CARD, PATCH NOTES, AND CREDITS</h4>
+              <time>2026-05-04</time>
+              <p>Account controls now stay visible on mobile and small windows. Footer links now include credits, patch notes, and a direct Buy Me a Coffee donation link.</p>
+              <div class="patch-grid">
+                <div>
+                  <h5>HIGHLIGHTS</h5>
+                  <p>+ Account card remains visible on smaller screens.</p>
+                  <p>+ Added Beat Battle-style patch notes window.</p>
+                  <p>+ Added credits window.</p>
+                </div>
+                <div>
+                  <h5>FIXES</h5>
+                  <p>+ Removed stale username prefill from local storage.</p>
+                  <p>+ Footer Discord link replaced by Credits.</p>
+                  <p>+ Donate opens Buy Me a Coffee.</p>
+                </div>
+              </div>
+            </article>
+
+            <article class="patch-card">
+              <h3>0.4.2</h3>
+              <h4>USERNAME DISPLAY FIX</h4>
+              <time>2026-05-04</time>
+              <p>Login now respects the username typed in the account window, and long usernames are truncated inside the account card.</p>
+            </article>
+
+            <article class="patch-card">
+              <h3>0.4.1</h3>
+              <h4>LOGIN REQUIRED BEFORE PLAYING</h4>
+              <time>2026-05-04</time>
+              <p>Play now opens the account window for logged-out users. The redundant name box was removed from the play menu.</p>
+            </article>
+
+            <article class="patch-card">
+              <h3>0.4.0</h3>
+              <h4>FIREBASE AUTH</h4>
+              <time>2026-05-04</time>
+              <p>Accounts moved to Firebase Authentication with Firestore-backed usernames, stats, and leaderboard.</p>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section class="modal-wrap screen" id="creditsScreen">
+        <div class="modal credits-modal">
+          <button class="modal-close back-btn" data-screen="homeScreen">X</button>
+          <div class="modal-inner">
+            <h2 class="modal-title">CREDITS</h2>
+            <div class="modal-kicker">CORE CONTRIBUTORS BEHIND SAYITLIKE.</div>
+
+            <div class="credits-list">
+              <div class="credit-row">
+                <div class="credit-avatar">🎙</div>
+                <div><strong>LUCAS</strong><span>OWNER, DEVELOPER, GAME DESIGN</span></div>
+              </div>
+              <div class="credit-row">
+                <div class="credit-avatar">⚡</div>
+                <div><strong>SAYITLIKE MVP</strong><span>VOICE PARTY GAME PROTOTYPE</span></div>
+              </div>
+              <div class="credit-row">
+                <div class="credit-avatar">☕</div>
+                <div><strong>SUPPORTERS</strong><span>DONATIONS, TESTING, CHAOS</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
       <section class="modal-wrap screen" id="donateScreen">
         <div class="modal small">
           <button class="modal-close back-btn" data-screen="homeScreen">X</button>
@@ -286,9 +364,9 @@
             <div class="modal-kicker">FREE GAME • SUPPORT OPTIONAL</div>
             <p class="donate-copy">This is a free MVP. Donation buttons are placeholders until payment is connected.</p>
             <div class="donate-grid">
-              <div class="donate-card"><strong>$1</strong><span>tiny laugh tax</span><button class="pixel-btn">DONATE</button></div>
-              <div class="donate-card"><strong>$3</strong><span>buy us a coffee</span><button class="pixel-btn">DONATE</button></div>
-              <div class="donate-card"><strong>$5</strong><span>absolute legend</span><button class="pixel-btn">DONATE</button></div>
+              <div class="donate-card"><strong>$1</strong><span>tiny laugh tax</span><a class="pixel-btn donate-link" href="https://www.buymeacoffee.com/" target="_blank" rel="noopener noreferrer">DONATE</a></div>
+              <div class="donate-card"><strong>$3</strong><span>buy us a coffee</span><a class="pixel-btn donate-link" href="https://www.buymeacoffee.com/" target="_blank" rel="noopener noreferrer">DONATE</a></div>
+              <div class="donate-card"><strong>$5</strong><span>absolute legend</span><a class="pixel-btn donate-link" href="https://www.buymeacoffee.com/" target="_blank" rel="noopener noreferrer">DONATE</a></div>
             </div>
           </div>
         </div>
@@ -298,12 +376,12 @@
 
       <footer class="footer-bar">
         <nav class="footer-links">
-          <a href="#" data-screen="howScreen">PATCH NOTES</a>
+          <a href="#" data-screen="patchScreen">PATCH NOTES</a>
           <a href="#" data-screen="howScreen">HOW TO PLAY</a>
-          <a href="#">DISCORD</a>
-          <a href="#" data-screen="donateScreen">DONATE</a>
+          <a href="#" data-screen="creditsScreen">CREDITS</a>
+          <a href="https://www.buymeacoffee.com/" target="_blank" rel="noopener noreferrer">DONATE</a>
         </nav>
-        <div class="status">ACTIVE PLAYERS: <span id="activePlayers">000</span> <span class="dot"></span> V 0.4.2 <span class="dot red"></span></div>
+        <div class="status">ACTIVE PLAYERS: <span id="activePlayers">000</span> <span class="dot"></span> V 0.4.3 <span class="dot red"></span></div>
       </footer>
     </main>
   </div>
