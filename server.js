@@ -13,11 +13,13 @@ const io = new Server(server, {
 
 const PORT = process.env.PORT || 3000;
 const MAX_PLAYERS = 10;
-const RECORDING_SECONDS = 60;
-const VOTING_SECONDS = 60;
+const MIN_PLAYERS = 2;
+const WRITING_SECONDS = 45;
+const PROMPT_VOTING_SECONDS = 25;
+const RECORDING_SECONDS = 35;
+const PERFORMANCE_VOTING_SECONDS = 45;
 const MAX_CLIP_BYTES = 1_400_000;
 const LEADERBOARD_LIMIT = 25;
-
 
 app.use(express.json({ limit: '64kb' }));
 
@@ -33,9 +35,7 @@ function initFirebaseAdmin() {
     }
 
     if (process.env.FIREBASE_SERVICE_ACCOUNT_BASE64) {
-      const serviceAccount = JSON.parse(
-        Buffer.from(process.env.FIREBASE_SERVICE_ACCOUNT_BASE64, 'base64').toString('utf8')
-      );
+      const serviceAccount = JSON.parse(Buffer.from(process.env.FIREBASE_SERVICE_ACCOUNT_BASE64, 'base64').toString('utf8'));
       admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
     } else if (process.env.FIREBASE_SERVICE_ACCOUNT) {
       const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
@@ -158,16 +158,8 @@ async function userFromToken(idToken) {
   let profile = await getUserProfile(decoded.uid);
 
   if (!profile) {
-    const fallbackUsername =
-      cleanUsername(decoded.name) ||
-      cleanUsername((decoded.email || '').split('@')[0]) ||
-      `user_${decoded.uid.slice(0, 6)}`;
-
-    profile = await upsertUserProfile({
-      uid: decoded.uid,
-      email: decoded.email || '',
-      username: fallbackUsername
-    });
+    const fallbackUsername = cleanUsername(decoded.name) || cleanUsername((decoded.email || '').split('@')[0]) || `user_${decoded.uid.slice(0, 6)}`;
+    profile = await upsertUserProfile({ uid: decoded.uid, email: decoded.email || '', username: fallbackUsername });
   }
 
   return profile;
@@ -176,11 +168,7 @@ async function userFromToken(idToken) {
 app.post('/api/users/profile', async (req, res) => {
   try {
     const decoded = await verifyIdToken(req.body?.idToken);
-    const profile = await upsertUserProfile({
-      uid: decoded.uid,
-      email: decoded.email || '',
-      username: req.body?.username
-    });
+    const profile = await upsertUserProfile({ uid: decoded.uid, email: decoded.email || '', username: req.body?.username });
     res.json({ user: profile });
   } catch (err) {
     res.status(err.statusCode || 500).json({ error: err.message || 'Could not save profile.' });
@@ -197,48 +185,26 @@ app.get('/api/users/me', async (req, res) => {
   }
 });
 
-
 app.use(express.static(path.join(__dirname, 'public')));
-
-const lines = [
-  "I can explain.",
-  "That wasn't supposed to happen.",
-  "Nobody needs to know.",
-  "I knew you would come back.",
-  "This is completely normal.",
-  "Put the chicken down.",
-  "We are not alone.",
-  "I trusted you.",
-  "You forgot one thing.",
-  "Don't open that door.",
-  "It was like this when I found it.",
-  "I swear I'm not lying.",
-  "This changes everything.",
-  "Why is it moving?",
-  "I have a bad feeling about this."
-];
-
-const styles = [
-  "like a supervillain",
-  "like a nervous liar",
-  "like a disappointed dad",
-  "like a robot learning emotions",
-  "like a soap opera actor",
-  "like a horror movie victim",
-  "like a motivational speaker",
-  "like a fake-nice customer service agent",
-  "like you're hiding a crime",
-  "like an anime protagonist",
-  "like a medieval king",
-  "like a terrible lawyer",
-  "like a reality show contestant",
-  "like you just got caught",
-  "like someone trying not to cry"
-];
 
 const rooms = new Map();
 const socketRooms = new Map();
-const playerStats = new Map(); // normalizedName -> {name,wins,gamesPlayed}
+const playerStats = new Map();
+
+const FALLBACK_LINES = [
+  'I can explain.',
+  'Nobody needs to know.',
+  'That was not supposed to happen.',
+  'Put the chicken down.',
+  'This changes everything.'
+];
+const FALLBACK_SCENARIOS = [
+  'you are the worst liar alive',
+  'you just got caught eating the wedding cake',
+  'you are trying to sound calm while everything is clearly on fire',
+  'you rehearsed this moment and still forgot every word',
+  'your plan worked but way too early'
+];
 
 function normalizeName(name) {
   return String(name || 'Guest').trim().slice(0, 16).toLowerCase();
@@ -259,11 +225,16 @@ function makeRoom(code = makeRoomCode(), isQuick = false) {
     isQuick,
     hostId: null,
     status: 'lobby',
-    prompt: null,
     players: new Map(),
+    assignments: new Map(),
+    submissions: new Map(),
+    promptVotes: new Map(),
     clips: new Map(),
-    votes: new Map(),
-    timers: { recording: null, voting: null },
+    performanceVotes: new Map(),
+    prompt: null,
+    promptOptions: { lines: [], scenarios: [] },
+    awards: null,
+    timers: { phase: null },
     endsAt: null,
     phaseStartedAt: null,
     phaseDuration: null,
@@ -274,31 +245,52 @@ function makeRoom(code = makeRoomCode(), isQuick = false) {
   return room;
 }
 
-function randomPrompt() {
+function clearPhaseTimer(room) {
+  clearTimeout(room.timers.phase);
+  room.timers.phase = null;
+}
+
+function phasePayload(room) {
   return {
-    line: lines[Math.floor(Math.random() * lines.length)],
-    style: styles[Math.floor(Math.random() * styles.length)]
+    endsAt: room.endsAt,
+    phaseStartedAt: room.phaseStartedAt,
+    phaseDuration: room.phaseDuration,
+    remainingSeconds: room.endsAt ? Math.max(0, Math.ceil((room.endsAt - Date.now()) / 1000)) : null
   };
 }
 
-function clipLetter(index) {
-  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
-  return alphabet[index] || String(index + 1);
+function beginTimedPhase(room, status, seconds, callback) {
+  clearPhaseTimer(room);
+  room.status = status;
+  room.phaseStartedAt = Date.now();
+  room.phaseDuration = seconds;
+  room.endsAt = room.phaseStartedAt + seconds * 1000;
+  room.timers.phase = setTimeout(() => callback(room), seconds * 1000);
 }
 
 function publicPlayers(room) {
-  return [...room.players.values()].map((p) => ({
-    id: p.id,
-    name: p.name,
-    connected: p.connected,
-    isHost: p.id === room.hostId,
-    submitted: !!p.submitted,
-    voted: !!p.voted,
-    hasAccount: !!p.userId
-  }));
+  return [...room.players.values()].map((p) => {
+    let submitted = false;
+    let voted = false;
+    if (room.status === 'writing') submitted = room.submissions.has(p.id);
+    if (room.status === 'promptVoting') voted = room.promptVotes.has(p.id);
+    if (room.status === 'recording') submitted = !!p.submitted;
+    if (room.status === 'performanceVoting') voted = room.performanceVotes.has(p.id);
+    return {
+      id: p.id,
+      name: p.name,
+      connected: p.connected,
+      isHost: p.id === room.hostId,
+      submitted,
+      voted,
+      role: room.assignments.get(p.id) || null,
+      hasAccount: !!p.userId
+    };
+  });
 }
 
 function roomPayload(room) {
+  const players = [...room.players.values()];
   return {
     code: room.code,
     isQuick: room.isQuick,
@@ -306,15 +298,22 @@ function roomPayload(room) {
     status: room.status,
     players: publicPlayers(room),
     prompt: room.prompt,
+    promptOptions: room.promptOptions,
+    awards: room.awards,
     round: room.round,
     maxPlayers: MAX_PLAYERS,
-    endsAt: room.endsAt,
-    phaseStartedAt: room.phaseStartedAt,
-    phaseDuration: room.phaseDuration,
-    remainingSeconds: room.endsAt ? Math.max(0, Math.ceil((room.endsAt - Date.now()) / 1000)) : null,
-    submittedCount: [...room.players.values()].filter((p) => p.submitted).length,
-    totalPlayers: room.players.size,
-    votedCount: room.votes.size
+    ...phasePayload(room),
+    submittedCount: room.status === 'writing'
+      ? room.submissions.size
+      : room.status === 'recording'
+        ? players.filter((p) => p.submitted).length
+        : 0,
+    votedCount: room.status === 'promptVoting'
+      ? room.promptVotes.size
+      : room.status === 'performanceVoting'
+        ? room.performanceVotes.size
+        : 0,
+    totalPlayers: room.players.size
   };
 }
 
@@ -342,11 +341,7 @@ function emitQuickRooms(target = io) {
 
 async function leaderboardPayload() {
   if (firebaseReady && db) {
-    const snap = await db.collection('users')
-      .orderBy('wins', 'desc')
-      .limit(LEADERBOARD_LIMIT)
-      .get();
-
+    const snap = await db.collection('users').orderBy('wins', 'desc').limit(LEADERBOARD_LIMIT).get();
     return snap.docs
       .map((doc, index) => {
         const data = doc.data();
@@ -364,11 +359,7 @@ async function leaderboardPayload() {
 
   return [...playerStats.values()]
     .filter((entry) => entry.wins > 0 || entry.gamesPlayed > 0)
-    .sort((a, b) =>
-      b.wins - a.wins ||
-      (b.gamesPlayed ? b.wins / b.gamesPlayed : 0) - (a.gamesPlayed ? a.wins / a.gamesPlayed : 0) ||
-      a.name.localeCompare(b.name)
-    )
+    .sort((a, b) => b.wins - a.wins || a.name.localeCompare(b.name))
     .slice(0, LEADERBOARD_LIMIT)
     .map((entry, index) => ({
       rank: index + 1,
@@ -389,13 +380,150 @@ async function emitLeaderboard(target = io) {
   }
 }
 
-
-
 function cleanupRoom(room) {
-  clearTimeout(room.timers.recording);
-  clearTimeout(room.timers.voting);
+  clearPhaseTimer(room);
   rooms.delete(room.code);
   emitQuickRooms();
+}
+
+function clipLetter(index) {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+  return alphabet[index] || String(index + 1);
+}
+
+function sanitizeLine(text) {
+  const value = String(text || '').trim().replace(/\s+/g, ' ').slice(0, 90);
+  if (value.length < 2) return null;
+  return value;
+}
+
+function sanitizeScenario(text) {
+  let value = String(text || '').trim().replace(/\s+/g, ' ').slice(0, 130);
+  value = value.replace(/^like\s+/i, '').trim();
+  if (value.length < 4) return null;
+  return value;
+}
+
+function shuffledPlayers(room) {
+  return [...room.players.values()].sort(() => Math.random() - 0.5);
+}
+
+function startRound(room) {
+  if (room.players.size < MIN_PLAYERS) {
+    io.to(room.code).emit('app:error', `Need at least ${MIN_PLAYERS} players for Awards Mode.`);
+    return;
+  }
+
+  clearPhaseTimer(room);
+  room.round += 1;
+  room.prompt = null;
+  room.awards = null;
+  room.promptOptions = { lines: [], scenarios: [] };
+  room.assignments.clear();
+  room.submissions.clear();
+  room.promptVotes.clear();
+  room.clips.clear();
+  room.performanceVotes.clear();
+  room.clipCounter = 0;
+
+  const players = shuffledPlayers(room);
+  const lineSlots = Math.ceil(players.length / 2);
+  players.forEach((player, index) => {
+    room.assignments.set(player.id, index < lineSlots ? 'line' : 'scenario');
+    player.submitted = false;
+    player.voted = false;
+  });
+
+  beginTimedPhase(room, 'writing', WRITING_SECONDS, endWriting);
+  emitRoom(room);
+  emitQuickRooms();
+
+  for (const player of room.players.values()) {
+    io.to(player.id).emit('round:writing', { role: room.assignments.get(player.id), ...phasePayload(room) });
+  }
+}
+
+function submissionPayload(room) {
+  return {
+    lines: [...room.submissions.values()].filter((s) => s.type === 'line'),
+    scenarios: [...room.submissions.values()].filter((s) => s.type === 'scenario')
+  };
+}
+
+function maybeEndWriting(room) {
+  if (room.status !== 'writing') return;
+  if (room.submissions.size >= room.players.size) endWriting(room);
+}
+
+function makeFallbackOption(type, index) {
+  const text = type === 'line' ? FALLBACK_LINES[index % FALLBACK_LINES.length] : FALLBACK_SCENARIOS[index % FALLBACK_SCENARIOS.length];
+  return { id: `${type}:fallback:${index}`, type, text, authorId: null, authorName: 'THE ACADEMY', votes: 0, fallback: true };
+}
+
+function endWriting(room) {
+  if (room.status !== 'writing') return;
+  clearPhaseTimer(room);
+
+  const submitted = submissionPayload(room);
+  const lines = submitted.lines.length ? submitted.lines : [makeFallbackOption('line', room.round)];
+  const scenarios = submitted.scenarios.length ? submitted.scenarios : [makeFallbackOption('scenario', room.round)];
+
+  room.promptOptions = { lines, scenarios };
+  room.promptVotes.clear();
+  for (const player of room.players.values()) player.voted = false;
+
+  beginTimedPhase(room, 'promptVoting', PROMPT_VOTING_SECONDS, endPromptVoting);
+  emitRoom(room);
+  io.to(room.code).emit('round:prompt-voting', { lines, scenarios, ...phasePayload(room) });
+}
+
+function maybeEndPromptVoting(room) {
+  if (room.status !== 'promptVoting') return;
+  if (room.promptVotes.size >= room.players.size) endPromptVoting(room);
+}
+
+function pickWinner(options, votes, voteKey) {
+  const tally = new Map(options.map((option) => [option.id, 0]));
+  for (const vote of votes.values()) {
+    const id = vote?.[voteKey];
+    if (tally.has(id)) tally.set(id, tally.get(id) + 1);
+  }
+  const scored = options.map((option) => ({ ...option, votes: tally.get(option.id) || 0 }));
+  const maxVotes = scored.reduce((max, option) => Math.max(max, option.votes), -1);
+  const tied = scored.filter((option) => option.votes === maxVotes);
+  return tied[Math.floor(Math.random() * tied.length)] || scored[0];
+}
+
+function endPromptVoting(room) {
+  if (room.status !== 'promptVoting') return;
+  clearPhaseTimer(room);
+
+  const bestLine = pickWinner(room.promptOptions.lines, room.promptVotes, 'lineId');
+  const bestScenario = pickWinner(room.promptOptions.scenarios, room.promptVotes, 'scenarioId');
+  room.promptOptions = {
+    lines: room.promptOptions.lines.map((option) => ({ ...option, votes: [...room.promptVotes.values()].filter((v) => v.lineId === option.id).length })),
+    scenarios: room.promptOptions.scenarios.map((option) => ({ ...option, votes: [...room.promptVotes.values()].filter((v) => v.scenarioId === option.id).length }))
+  };
+  room.prompt = {
+    line: bestLine.text,
+    scenario: bestScenario.text,
+    style: `like ${bestScenario.text}`,
+    lineAuthorId: bestLine.authorId,
+    lineAuthorName: bestLine.authorName,
+    scenarioAuthorId: bestScenario.authorId,
+    scenarioAuthorName: bestScenario.authorName
+  };
+
+  room.clips.clear();
+  room.performanceVotes.clear();
+  for (const player of room.players.values()) {
+    player.submitted = false;
+    player.voted = false;
+  }
+
+  beginTimedPhase(room, 'recording', RECORDING_SECONDS, endRecording);
+  emitRoom(room);
+  io.to(room.code).emit('round:recording', { prompt: room.prompt, ...phasePayload(room) });
 }
 
 function maybeEndRecording(room) {
@@ -405,90 +533,23 @@ function maybeEndRecording(room) {
   if (submitted >= activePlayers.length) endRecording(room);
 }
 
-function maybeEndVoting(room) {
-  if (room.status !== 'voting') return;
-  const possibleVoters = [...room.players.values()].filter((p) => room.clips.size > 1 || ![...room.clips.values()].some((c) => c.playerId === p.id));
-  if (room.votes.size >= possibleVoters.length) endVoting(room);
-}
-
-function leaveCurrentRoom(socket) {
-  const code = socketRooms.get(socket.id);
-  if (!code) return;
-  const room = rooms.get(code);
-  socketRooms.delete(socket.id);
-  socket.leave(code);
-  if (!room) return;
-
-  room.players.delete(socket.id);
-  room.votes.delete(socket.id);
-
-  for (const [clipId, clip] of room.clips.entries()) {
-    if (clip.playerId === socket.id) {
-      room.clips.delete(clipId);
-      for (const [voterId, votedClipId] of room.votes.entries()) {
-        if (votedClipId === clipId) room.votes.delete(voterId);
-      }
-    }
-  }
-
-  if (room.players.size === 0) {
-    cleanupRoom(room);
-    return;
-  }
-
-  if (room.hostId === socket.id) {
-    room.hostId = [...room.players.keys()][0];
-  }
-
-  if (room.status === 'recording') maybeEndRecording(room);
-  if (room.status === 'voting') maybeEndVoting(room);
-  emitRoom(room);
-  emitQuickRooms();
-}
-
-function startRound(room) {
-  clearTimeout(room.timers.recording);
-  clearTimeout(room.timers.voting);
-  room.status = 'recording';
-  room.prompt = randomPrompt();
-  room.clips.clear();
-  room.votes.clear();
-  room.clipCounter = 0;
-  room.round += 1;
-  room.phaseStartedAt = Date.now();
-  room.phaseDuration = RECORDING_SECONDS;
-  room.endsAt = room.phaseStartedAt + RECORDING_SECONDS * 1000;
-
-  for (const player of room.players.values()) {
-    player.submitted = false;
-    player.voted = false;
-  }
-
-  room.timers.recording = setTimeout(() => endRecording(room), RECORDING_SECONDS * 1000);
-  emitRoom(room);
-  emitQuickRooms();
-}
-
 function endRecording(room) {
   if (room.status !== 'recording') return;
-  clearTimeout(room.timers.recording);
+  clearPhaseTimer(room);
 
   if (room.clips.size === 0) {
     room.status = 'lobby';
     room.endsAt = null;
     room.phaseStartedAt = null;
     room.phaseDuration = null;
-    io.to(room.code).emit('game:notice', 'Nobody submitted a clip. Round cancelled.');
+    io.to(room.code).emit('game:notice', 'Nobody submitted a performance. Round cancelled.');
     emitRoom(room);
     emitQuickRooms();
     return;
   }
 
-  room.status = 'voting';
-  room.phaseStartedAt = Date.now();
-  room.phaseDuration = VOTING_SECONDS;
-  room.endsAt = room.phaseStartedAt + VOTING_SECONDS * 1000;
-  room.timers.voting = setTimeout(() => endVoting(room), VOTING_SECONDS * 1000);
+  for (const player of room.players.values()) player.voted = false;
+  beginTimedPhase(room, 'performanceVoting', PERFORMANCE_VOTING_SECONDS, endPerformanceVoting);
 
   const clips = [...room.clips.values()].map((clip, index) => ({
     clipId: clip.clipId,
@@ -499,23 +560,27 @@ function endRecording(room) {
 
   for (const player of room.players.values()) {
     const ownClip = [...room.clips.values()].find((clip) => clip.playerId === player.id);
-    io.to(player.id).emit('round:voting', {
+    io.to(player.id).emit('round:performance-voting', {
       clips,
       ownClipId: ownClip ? ownClip.clipId : null,
       prompt: room.prompt,
-      endsAt: room.endsAt,
-      phaseStartedAt: room.phaseStartedAt,
-      phaseDuration: room.phaseDuration,
-      remainingSeconds: room.endsAt ? Math.max(0, Math.ceil((room.endsAt - Date.now()) / 1000)) : null
+      ...phasePayload(room)
     });
   }
+
   emitRoom(room);
-  maybeEndVoting(room);
+  maybeEndPerformanceVoting(room);
 }
 
-function endVoting(room) {
-  if (room.status !== 'voting') return;
-  clearTimeout(room.timers.voting);
+function maybeEndPerformanceVoting(room) {
+  if (room.status !== 'performanceVoting') return;
+  const possibleVoters = [...room.players.values()].filter((p) => room.clips.size > 1 || ![...room.clips.values()].some((c) => c.playerId === p.id));
+  if (room.performanceVotes.size >= possibleVoters.length) endPerformanceVoting(room);
+}
+
+function endPerformanceVoting(room) {
+  if (room.status !== 'performanceVoting') return;
+  clearPhaseTimer(room);
   room.status = 'results';
   room.endsAt = null;
   room.phaseStartedAt = null;
@@ -523,7 +588,7 @@ function endVoting(room) {
 
   const tally = new Map();
   for (const clip of room.clips.values()) tally.set(clip.clipId, 0);
-  for (const clipId of room.votes.values()) tally.set(clipId, (tally.get(clipId) || 0) + 1);
+  for (const clipId of room.performanceVotes.values()) tally.set(clipId, (tally.get(clipId) || 0) + 1);
 
   const clips = [...room.clips.values()].map((clip, index) => {
     const player = room.players.get(clip.playerId);
@@ -538,34 +603,37 @@ function endVoting(room) {
     };
   });
 
-  const maxVotes = clips.reduce((max, c) => Math.max(max, c.votes), 0);
-  const winners = clips.filter((c) => c.votes === maxVotes && clips.length && maxVotes >= 0);
+  const maxVotes = clips.reduce((max, c) => Math.max(max, c.votes), -1);
+  const winners = clips.filter((c) => c.votes === maxVotes);
+  const bestPerformance = winners[Math.floor(Math.random() * winners.length)] || null;
 
-  // update leaderboard stats. Account stats persist in Firestore; guest stats stay in memory.
+  room.awards = {
+    bestLine: { text: room.prompt?.line || '', winnerName: room.prompt?.lineAuthorName || 'THE ACADEMY', winnerId: room.prompt?.lineAuthorId || null },
+    bestScenario: { text: room.prompt?.scenario || '', winnerName: room.prompt?.scenarioAuthorName || 'THE ACADEMY', winnerId: room.prompt?.scenarioAuthorId || null },
+    bestPerformance: bestPerformance ? {
+      text: bestPerformance.label,
+      winnerName: bestPerformance.playerName,
+      winnerId: bestPerformance.playerId,
+      votes: bestPerformance.votes,
+      clipId: bestPerformance.clipId
+    } : null
+  };
+
+  const winningPlayerIds = new Set(winners.map((winner) => winner.playerId));
   const participantPlayers = new Map();
   for (const clip of room.clips.values()) {
     const player = room.players.get(clip.playerId);
     if (player) participantPlayers.set(player.id, player);
   }
 
-  const winningPlayerIds = new Set(
-    winners
-      .map((winner) => room.players.get(winner.playerId))
-      .filter(Boolean)
-      .map((player) => player.id)
-  );
-
   const accountUpdates = [];
-
   for (const player of participantPlayers.values()) {
     if (player.userId && firebaseReady && db) {
-      accountUpdates.push(
-        db.collection('users').doc(player.userId).set({
-          gamesPlayed: admin.firestore.FieldValue.increment(1),
-          wins: winningPlayerIds.has(player.id) ? admin.firestore.FieldValue.increment(1) : admin.firestore.FieldValue.increment(0),
-          updatedAt: admin.firestore.FieldValue.serverTimestamp()
-        }, { merge: true })
-      );
+      accountUpdates.push(db.collection('users').doc(player.userId).set({
+        gamesPlayed: admin.firestore.FieldValue.increment(1),
+        wins: winningPlayerIds.has(player.id) ? admin.firestore.FieldValue.increment(1) : admin.firestore.FieldValue.increment(0),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp()
+      }, { merge: true }));
     } else {
       const norm = normalizeName(player.name);
       const current = playerStats.get(norm) || { name: player.name, wins: 0, gamesPlayed: 0 };
@@ -583,10 +651,49 @@ function endVoting(room) {
 
   io.to(room.code).emit('round:results', {
     prompt: room.prompt,
+    promptOptions: room.promptOptions,
     clips,
     winners,
-    totalVotes: room.votes.size
+    awards: room.awards,
+    totalVotes: room.performanceVotes.size
   });
+  emitRoom(room);
+  emitQuickRooms();
+}
+
+function leaveCurrentRoom(socket) {
+  const code = socketRooms.get(socket.id);
+  if (!code) return;
+  const room = rooms.get(code);
+  socketRooms.delete(socket.id);
+  socket.leave(code);
+  if (!room) return;
+
+  room.players.delete(socket.id);
+  room.assignments.delete(socket.id);
+  room.submissions.delete(socket.id);
+  room.promptVotes.delete(socket.id);
+  room.performanceVotes.delete(socket.id);
+
+  for (const [clipId, clip] of room.clips.entries()) {
+    if (clip.playerId === socket.id) {
+      room.clips.delete(clipId);
+      for (const [voterId, votedClipId] of room.performanceVotes.entries()) {
+        if (votedClipId === clipId) room.performanceVotes.delete(voterId);
+      }
+    }
+  }
+
+  if (room.players.size === 0) {
+    cleanupRoom(room);
+    return;
+  }
+
+  if (room.hostId === socket.id) room.hostId = [...room.players.keys()][0];
+  if (room.status === 'writing') maybeEndWriting(room);
+  if (room.status === 'promptVoting') maybeEndPromptVoting(room);
+  if (room.status === 'recording') maybeEndRecording(room);
+  if (room.status === 'performanceVoting') maybeEndPerformanceVoting(room);
   emitRoom(room);
   emitQuickRooms();
 }
@@ -603,30 +710,14 @@ function joinRoom(socket, room, name) {
   }
 
   const authUser = socket.data.user || null;
-
-  const cleanName = authUser
-    ? authUser.username
-    : (String(name || 'Guest').trim().slice(0, 16) || 'Guest');
-
-  room.players.set(socket.id, {
-    id: socket.id,
-    userId: authUser ? authUser.id : null,
-    name: cleanName,
-    connected: true,
-    submitted: false,
-    voted: false
-  });
+  const cleanName = authUser ? authUser.username : (String(name || 'Guest').trim().slice(0, 16) || 'Guest');
+  room.players.set(socket.id, { id: socket.id, userId: authUser ? authUser.id : null, name: cleanName, connected: true, submitted: false, voted: false });
 
   if (!room.hostId) room.hostId = socket.id;
 
   socket.join(room.code);
   socketRooms.set(socket.id, room.code);
-  socket.emit('room:joined', {
-    code: room.code,
-    playerId: socket.id,
-    isHost: room.hostId === socket.id,
-    isQuick: room.isQuick
-  });
+  socket.emit('room:joined', { code: room.code, playerId: socket.id, isHost: room.hostId === socket.id, isQuick: room.isQuick });
   emitRoom(room);
   emitQuickRooms();
   return true;
@@ -640,6 +731,7 @@ io.on('connection', (socket) => {
 
   socket.on('quick:list', () => emitQuickRooms(socket));
   socket.on('leaderboard:get', () => emitLeaderboard(socket));
+
   socket.on('auth:set', async ({ idToken } = {}) => {
     try {
       socket.data.user = await userFromToken(idToken);
@@ -651,15 +743,13 @@ io.on('connection', (socket) => {
       socket.emit('app:hello', { playerId: socket.id, maxPlayers: MAX_PLAYERS, user: null });
     }
   });
+
   socket.on('auth:clear', () => {
     socket.data.user = null;
     socket.emit('app:hello', { playerId: socket.id, maxPlayers: MAX_PLAYERS, user: null });
   });
 
-  socket.on('quick:create', ({ name } = {}) => {
-    const room = makeRoom(undefined, true);
-    joinRoom(socket, room, name);
-  });
+  socket.on('quick:create', ({ name } = {}) => joinRoom(socket, makeRoom(undefined, true), name));
 
   socket.on('quick:join', ({ name, code } = {}) => {
     const normalizedCode = String(code || '').trim().toUpperCase();
@@ -671,10 +761,7 @@ io.on('connection', (socket) => {
     joinRoom(socket, room, name);
   });
 
-  socket.on('custom:create', ({ name } = {}) => {
-    const room = makeRoom(undefined, false);
-    joinRoom(socket, room, name);
-  });
+  socket.on('custom:create', ({ name } = {}) => joinRoom(socket, makeRoom(undefined, false), name));
 
   socket.on('custom:join', ({ name, code } = {}) => {
     const normalizedCode = String(code || '').trim().toUpperCase();
@@ -696,11 +783,45 @@ io.on('connection', (socket) => {
       socket.emit('app:error', 'Only the host can start the round.');
       return;
     }
-    if (room.players.size < 1) {
-      socket.emit('app:error', 'Need at least 1 player to start.');
+    startRound(room);
+  });
+
+  socket.on('prompt:submit', ({ text } = {}) => {
+    const code = socketRooms.get(socket.id);
+    const room = rooms.get(code);
+    if (!room || room.status !== 'writing') return;
+    const player = room.players.get(socket.id);
+    const role = room.assignments.get(socket.id);
+    if (!player || !role) return;
+
+    const cleanText = role === 'line' ? sanitizeLine(text) : sanitizeScenario(text);
+    if (!cleanText) {
+      socket.emit('app:error', role === 'line' ? 'Write a short line first.' : 'Write a scenario first.');
       return;
     }
-    startRound(room);
+
+    room.submissions.set(socket.id, { id: `${role}:${socket.id}:${room.round}`, type: role, text: cleanText, authorId: socket.id, authorName: player.name, votes: 0, fallback: false });
+    socket.emit('prompt:submitted');
+    emitRoom(room);
+    maybeEndWriting(room);
+  });
+
+  socket.on('prompt:vote', ({ lineId, scenarioId } = {}) => {
+    const code = socketRooms.get(socket.id);
+    const room = rooms.get(code);
+    if (!room || room.status !== 'promptVoting') return;
+    const player = room.players.get(socket.id);
+    if (!player) return;
+    const lineOk = room.promptOptions.lines.some((option) => option.id === lineId);
+    const scenarioOk = room.promptOptions.scenarios.some((option) => option.id === scenarioId);
+    if (!lineOk || !scenarioOk) {
+      socket.emit('app:error', 'Pick one line and one scenario.');
+      return;
+    }
+    room.promptVotes.set(socket.id, { lineId, scenarioId });
+    socket.emit('prompt:vote-submitted');
+    emitRoom(room);
+    maybeEndPromptVoting(room);
   });
 
   socket.on('clip:submit', ({ audioData, mimeType } = {}) => {
@@ -710,7 +831,7 @@ io.on('connection', (socket) => {
     const player = room.players.get(socket.id);
     if (!player) return;
     if (player.submitted) {
-      socket.emit('app:error', 'You already submitted your clip.');
+      socket.emit('app:error', 'You already submitted your performance.');
       return;
     }
 
@@ -729,13 +850,7 @@ io.on('connection', (socket) => {
     }
 
     const clipId = `${socket.id}:${Date.now()}:${++room.clipCounter}`;
-    room.clips.set(clipId, {
-      clipId,
-      playerId: socket.id,
-      audioData: data,
-      mimeType: String(mimeType || 'audio/webm'),
-      submittedAt: Date.now()
-    });
+    room.clips.set(clipId, { clipId, playerId: socket.id, audioData: data, mimeType: String(mimeType || 'audio/webm'), submittedAt: Date.now() });
     player.submitted = true;
     socket.emit('clip:submitted');
     emitRoom(room);
@@ -745,7 +860,7 @@ io.on('connection', (socket) => {
   socket.on('vote:submit', ({ clipId } = {}) => {
     const code = socketRooms.get(socket.id);
     const room = rooms.get(code);
-    if (!room || room.status !== 'voting') return;
+    if (!room || room.status !== 'performanceVoting') return;
     const player = room.players.get(socket.id);
     const clip = room.clips.get(String(clipId || ''));
     if (!player || !clip) return;
@@ -753,15 +868,14 @@ io.on('connection', (socket) => {
       socket.emit('app:error', "You can't vote for yourself.");
       return;
     }
-    if (room.votes.has(socket.id)) {
+    if (room.performanceVotes.has(socket.id)) {
       socket.emit('app:error', 'You already voted.');
       return;
     }
-    room.votes.set(socket.id, clip.clipId);
-    player.voted = true;
+    room.performanceVotes.set(socket.id, clip.clipId);
     socket.emit('vote:submitted');
     emitRoom(room);
-    maybeEndVoting(room);
+    maybeEndPerformanceVoting(room);
   });
 
   socket.on('disconnect', () => leaveCurrentRoom(socket));

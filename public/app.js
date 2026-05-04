@@ -5,7 +5,8 @@ const $$ = (selector) => [...document.querySelectorAll(selector)];
 
 let currentRoom = null;
 let myId = null;
-let currentVotingPayload = null;
+let currentPromptVotingPayload = null;
+let currentPerformanceVotingPayload = null;
 let currentResultsPayload = null;
 let mediaRecorder = null;
 let mediaStream = null;
@@ -15,29 +16,12 @@ let tickTimer = null;
 let soundEnabled = true;
 let uiVolume = Number(localStorage.getItem('sayitlike_volume') || 70);
 let audioCtx = null;
-let activePhaseKey = null;
-let localTimerEnd = null;
 let quickRooms = [];
 let leaderboard = [];
-
-const screens = {
-  home: $('#homeScreen'),
-  play: $('#playScreen'),
-  quick: $('#quickScreen'),
-  custom: $('#customScreen'),
-  lobby: $('#lobbyScreen'),
-  record: $('#recordScreen'),
-  voting: $('#votingScreen'),
-  results: $('#resultsScreen'),
-  how: $('#howScreen'),
-  hall: $('#hallScreen'),
-  account: $('#accountScreen'),
-  donate: $('#donateScreen'),
-  patch: $('#patchScreen'),
-  credits: $('#creditsScreen')
-};
-
-const screenIds = new Set(Object.values(screens).map((el) => el.id));
+let firebaseAuth = null;
+let firebaseConfigured = false;
+let selectedLineId = null;
+let selectedScenarioId = null;
 
 function getAudioContext() {
   if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -59,19 +43,23 @@ function beep(freq = 700, duration = 0.06, volume = 0.55, type = 'square') {
     gain.connect(ctx.destination);
     osc.start();
     osc.stop(ctx.currentTime + duration);
-  } catch (err) {
-    // Browser probably blocked audio before first user interaction.
-  }
+  } catch {}
 }
-
 function menuSound() { beep(740, 0.055, 0.7); setTimeout(() => beep(980, 0.045, 0.45), 45); }
 function softSound() { beep(340, 0.055, 0.38, 'triangle'); }
 function actionSound() { beep(620, 0.04, 0.55); setTimeout(() => beep(900, 0.04, 0.45), 40); }
 function errorSound() { beep(180, 0.12, 0.55, 'sawtooth'); }
 function winSound() { beep(660, 0.07, 0.55); setTimeout(() => beep(880, 0.07, 0.55), 80); setTimeout(() => beep(1320, 0.12, 0.55), 160); }
 
+function escapeHtml(str) {
+  return String(str ?? '').replace(/[&<'"]/g, (ch) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#039;', '"': '&quot;'
+  }[ch]));
+}
+
 function showToast(message, isError = false) {
   const toast = $('#toast');
+  if (!toast) return;
   toast.textContent = message;
   toast.hidden = false;
   toast.style.borderColor = isError ? '#fb7185' : 'var(--red)';
@@ -81,12 +69,23 @@ function showToast(message, isError = false) {
 }
 
 function showScreen(screenId) {
-  if (!screenIds.has(screenId)) return;
-  $$('.screen').forEach((el) => el.classList.remove('active'));
   const target = document.getElementById(screenId);
+  if (!target) return;
+  $$('.screen').forEach((el) => el.classList.remove('active'));
   target.classList.add('active');
   if (screenId === 'quickScreen') socket.emit('quick:list');
   if (screenId === 'hallScreen') socket.emit('leaderboard:get');
+}
+
+function promptText(prompt) {
+  if (!prompt) return '—';
+  const line = prompt.line || '—';
+  const scenario = prompt.scenario || prompt.style || '—';
+  return `Say "${line}" like ${scenario}.`;
+}
+
+function myPlayer(room = currentRoom) {
+  return room?.players?.find((player) => player.id === myId) || null;
 }
 
 function requireLoginToPlay() {
@@ -98,24 +97,22 @@ function requireLoginToPlay() {
 
 function getName() {
   if (authUser?.username) {
-    $('#playerName').value = authUser.username;
-    $('#accountName').textContent = authUser.username.toUpperCase().replace(/\s+/g, '_');
+    const playerName = $('#playerName');
+    if (playerName) playerName.value = authUser.username;
+    const accountName = $('#accountName');
+    if (accountName) accountName.textContent = authUser.username.toUpperCase().replace(/\s+/g, '_');
     return authUser.username;
   }
-
-  $('#playerName').value = 'Guest';
-  $('#accountName').textContent = 'GUEST';
+  const playerName = $('#playerName');
+  if (playerName) playerName.value = 'Guest';
+  const accountName = $('#accountName');
+  if (accountName) accountName.textContent = 'GUEST';
   return 'Guest';
 }
 
 function setNameFromStorage() {
-  const saved = localStorage.getItem('sayitlike_name') || 'Guest';
-  $('#playerName').value = saved;
-  $('#accountName').textContent = saved.toUpperCase().replace(/\s+/g, '_') + '_';
+  getName();
 }
-
-let firebaseAuth = null;
-let firebaseConfigured = false;
 
 function initFirebaseAuth() {
   try {
@@ -125,7 +122,6 @@ function initFirebaseAuth() {
       console.warn('Firebase web config is missing. Edit public/firebase-config.js.');
       return;
     }
-
     if (!firebase.apps.length) firebase.initializeApp(config);
     firebaseAuth = firebase.auth();
     firebaseConfigured = true;
@@ -137,11 +133,9 @@ function initFirebaseAuth() {
         socket.emit('auth:clear');
         return;
       }
-
       try {
         const idToken = await user.getIdToken();
-        const profile = await fetchProfile(idToken);
-        authUser = profile;
+        authUser = await fetchProfile(idToken);
         renderAuthUI();
         socket.emit('auth:set', { idToken });
       } catch (err) {
@@ -157,24 +151,18 @@ function initFirebaseAuth() {
 }
 
 function requireFirebaseClient() {
-  if (!firebaseConfigured || !firebaseAuth) {
-    throw new Error('Firebase is not configured. Edit firebase-config.js first.');
-  }
+  if (!firebaseConfigured || !firebaseAuth) throw new Error('Firebase is not configured. Edit firebase-config.js first.');
 }
 
 async function apiRequest(path, idToken, body = null) {
   const options = {
     method: body ? 'POST' : 'GET',
-    headers: {
-      Authorization: `Bearer ${idToken}`
-    }
+    headers: { Authorization: `Bearer ${idToken}` }
   };
-
   if (body) {
     options.headers['Content-Type'] = 'application/json';
     options.body = JSON.stringify({ ...body, idToken });
   }
-
   const res = await fetch(path, options);
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || 'Account request failed.');
@@ -193,24 +181,30 @@ async function saveProfile(idToken, username) {
 
 function renderAuthUI() {
   const isSignedIn = !!authUser;
-  $('#authGuestPanel').hidden = isSignedIn;
-  $('#authUserPanel').hidden = !isSignedIn;
+  const guestPanel = $('#authGuestPanel');
+  const userPanel = $('#authUserPanel');
+  if (guestPanel) guestPanel.hidden = isSignedIn;
+  if (userPanel) userPanel.hidden = !isSignedIn;
 
+  const accountName = $('#accountName');
+  const accountWins = $('#accountWins');
+  const accountLevel = $('#accountLevel');
+  const playerName = $('#playerName');
   if (isSignedIn) {
     const display = authUser.username.toUpperCase().replace(/\s+/g, '_');
-    $('#accountName').textContent = display;
-    $('#playerName').value = authUser.username;
-    $('#playerName').disabled = true;
-    $('#authSignedUsername').textContent = display;
-    $('#authSignedStats').textContent = `${authUser.wins || 0} WINS • ${authUser.gamesPlayed || 0} GAMES`;
-    $('#accountWins').textContent = `${authUser.wins || 0} W`;
-    $('#accountLevel').textContent = String(Math.max(1, Math.floor((authUser.wins || 0) / 3) + 1));
+    if (accountName) accountName.textContent = display;
+    if (playerName) { playerName.value = authUser.username; playerName.disabled = true; }
+    const signedUsername = $('#authSignedUsername');
+    const signedStats = $('#authSignedStats');
+    if (signedUsername) signedUsername.textContent = display;
+    if (signedStats) signedStats.textContent = `${authUser.wins || 0} WINS • ${authUser.gamesPlayed || 0} GAMES`;
+    if (accountWins) accountWins.textContent = `${authUser.wins || 0} W`;
+    if (accountLevel) accountLevel.textContent = String(Math.max(1, Math.floor((authUser.wins || 0) / 3) + 1));
   } else {
-    $('#playerName').disabled = false;
-    $('#playerName').value = 'Guest';
-    $('#accountName').textContent = 'GUEST';
-    $('#accountWins').textContent = '0 W';
-    $('#accountLevel').textContent = '1';
+    if (playerName) { playerName.disabled = false; playerName.value = 'Guest'; }
+    if (accountName) accountName.textContent = 'GUEST';
+    if (accountWins) accountWins.textContent = '0 W';
+    if (accountLevel) accountLevel.textContent = '1';
   }
 }
 
@@ -218,130 +212,118 @@ async function loadAuthUser() {
   initFirebaseAuth();
 }
 
-async function signup() {
-  try {
-    requireFirebaseClient();
-    const email = $('#authEmail').value.trim();
-    const username = $('#authUsername').value.trim();
-    const password = $('#authPassword').value;
-
-    const credential = await firebaseAuth.createUserWithEmailAndPassword(email, password);
-    await credential.user.updateProfile({ displayName: username });
-    const idToken = await credential.user.getIdToken(true);
-    authUser = await saveProfile(idToken, username);
-    renderAuthUI();
-    socket.emit('auth:set', { idToken });
-    showToast('Account created.');
-    showScreen($('#roomCodeInput').value ? 'customScreen' : 'playScreen');
-  } catch (err) {
-    showToast(err.message, true);
-  }
-}
-
-async function login() {
-  try {
-    requireFirebaseClient();
-    const email = $('#authEmail').value.trim();
-    const username = $('#authUsername').value.trim();
-    const password = $('#authPassword').value;
-
-    const credential = await firebaseAuth.signInWithEmailAndPassword(email, password);
-    const idToken = await credential.user.getIdToken(true);
-
-    // Important: if a username is typed in the login window, use it as the public name.
-    // Without this, existing Firebase accounts may fall back to the email prefix.
-    authUser = username
-      ? await saveProfile(idToken, username)
-      : await fetchProfile(idToken);
-
-    renderAuthUI();
-    socket.emit('auth:set', { idToken });
-    showToast('Logged in.');
-    showScreen($('#roomCodeInput').value ? 'customScreen' : 'playScreen');
-  } catch (err) {
-    showToast(err.message, true);
-  }
-}
-
-async function logout() {
-  try {
-    requireFirebaseClient();
-    await firebaseAuth.signOut();
-  } catch {
-    // Keep going locally even if Firebase signout fails.
-  }
-  authUser = null;
-  renderAuthUI();
-  socket.emit('auth:clear');
-  showToast('Logged out.');
-  showScreen('homeScreen');
-}
-
-
 function setVolumeUI() {
-  $('#volumeSlider').value = uiVolume;
-  $('#volumeValue').textContent = `${uiVolume}%`;
+  const slider = $('#volumeSlider');
+  const value = $('#volumeValue');
+  if (slider) slider.value = uiVolume;
+  if (value) value.textContent = `${uiVolume}%`;
 }
 
 function copyText(value) {
-  navigator.clipboard?.writeText(value)
-    .then(() => showToast('Copied.'))
-    .catch(() => showToast('Could not copy. Copy manually.', true));
+  navigator.clipboard?.writeText(value).then(() => showToast('Copied.')).catch(() => showToast('Could not copy. Copy manually.', true));
 }
 
 function updateTimer(remainingSeconds, elementId) {
   clearInterval(tickTimer);
   const el = document.getElementById(elementId);
   if (remainingSeconds == null || !el) return;
-
-  localTimerEnd = Date.now() + Math.max(0, Number(remainingSeconds)) * 1000;
-
+  const end = Date.now() + Math.max(0, Number(remainingSeconds)) * 1000;
   const tick = () => {
-    const remaining = Math.max(0, Math.ceil((localTimerEnd - Date.now()) / 1000));
+    const remaining = Math.max(0, Math.ceil((end - Date.now()) / 1000));
     el.textContent = String(remaining).padStart(2, '0');
     if (remaining <= 0) clearInterval(tickTimer);
   };
-
   tick();
   tickTimer = setInterval(tick, 250);
 }
 
+function injectAwardsScreens() {
+  if ($('#writingScreen')) return;
+  const recordScreen = $('#recordScreen');
+  if (!recordScreen) return;
+
+  const writing = document.createElement('section');
+  writing.className = 'modal-wrap screen';
+  writing.id = 'writingScreen';
+  writing.innerHTML = `
+    <div class="modal">
+      <div class="modal-inner">
+        <h2 class="modal-title">BEST WRITING</h2>
+        <div class="modal-kicker" id="writingKicker">WRITE YOUR NOMINEE</div>
+        <div class="timer" id="writingTimer">45</div>
+        <div class="section">
+          <h3 id="writingRoleTitle">YOUR CATEGORY</h3>
+          <p id="writingInstructions">Write something short.</p>
+          <textarea id="promptSubmissionInput" class="prompt-input" maxlength="130" placeholder="Type here..."></textarea>
+          <div class="action-row"><button class="pixel-btn" id="submitPromptBtn">SUBMIT NOMINEE</button></div>
+          <p class="tiny-note" id="writingHint">Keep it short. The winning line and scenario become the final prompt.</p>
+        </div>
+        <div class="waiting-bar"><span id="writingSubmittedCount">0</span>/<span id="writingTotalPlayers">0</span> submitted</div>
+      </div>
+    </div>`;
+
+  const promptVote = document.createElement('section');
+  promptVote.className = 'modal-wrap screen';
+  promptVote.id = 'promptVoteScreen';
+  promptVote.innerHTML = `
+    <div class="modal">
+      <div class="modal-inner">
+        <h2 class="modal-title">THE NOMINEES</h2>
+        <div class="modal-kicker">VOTE FOR BEST LINE AND BEST SCENARIO</div>
+        <div class="timer" id="promptVoteTimer">25</div>
+        <div class="awards-vote-grid">
+          <div class="section"><h3>BEST LINE</h3><div id="lineOptionsList" class="option-list"></div></div>
+          <div class="section"><h3>BEST SCENARIO</h3><div id="scenarioOptionsList" class="option-list"></div></div>
+        </div>
+        <div class="action-row"><button class="pixel-btn" id="submitPromptVoteBtn">SUBMIT VOTES</button></div>
+        <div class="waiting-bar"><span id="promptVotedCount">0</span> votes in</div>
+      </div>
+    </div>`;
+
+  recordScreen.before(writing, promptVote);
+
+  const style = document.createElement('style');
+  style.id = 'awardsModeStyles';
+  style.textContent = `
+    .prompt-input{width:100%;min-height:110px;background:#140a24;color:#fff4e4;border:2px solid var(--purple);border-radius:12px;padding:14px;font-family:ui-monospace,monospace;font-size:14px;resize:vertical;box-sizing:border-box;text-transform:none}
+    .awards-vote-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+    .option-list{display:grid;gap:10px}
+    .option-card{display:block;width:100%;text-align:left;background:#140a24;color:#fff4e4;border:2px solid #3f1d70;border-radius:14px;padding:12px;cursor:pointer;font-family:ui-monospace,monospace;text-transform:none}
+    .option-card.selected{border-color:var(--green);box-shadow:0 0 0 2px rgba(34,197,94,.2)}
+    .option-card small{display:block;color:var(--muted);margin-top:6px;text-transform:uppercase;font-size:9px}
+    .award-card{background:#140a24;border:2px solid #3f1d70;border-radius:16px;padding:14px;margin:10px 0}
+    .award-title{color:var(--green);font-size:12px;text-transform:uppercase;margin-bottom:6px}
+    .award-value{font-size:18px;color:#fff4e4;margin-bottom:6px}
+    .award-winner{color:var(--muted);font-size:11px;text-transform:uppercase}
+    @media(max-width:700px){.awards-vote-grid{grid-template-columns:1fr}.prompt-input{min-height:90px}}
+  `;
+  document.head.appendChild(style);
+
+  $('#submitPromptBtn')?.addEventListener('click', submitPromptEntry);
+  $('#submitPromptVoteBtn')?.addEventListener('click', submitPromptVote);
+}
+
 function renderPlayers(players = []) {
   const playersList = $('#playersList');
+  if (!playersList) return;
   playersList.innerHTML = '';
   players.forEach((player) => {
     const div = document.createElement('div');
     div.className = 'player-chip';
-    const status = currentRoom?.status === 'recording'
-      ? (player.submitted ? 'SUBMITTED' : 'RECORDING')
-      : currentRoom?.status === 'voting'
-        ? (player.voted ? 'VOTED' : 'VOTING')
-        : (player.isHost ? 'HOST' : 'READY');
+    let status = player.isHost ? 'HOST' : 'READY';
+    if (currentRoom?.status === 'writing') status = player.submitted ? 'WRITTEN' : (player.role === 'line' ? 'LINE' : 'SCENARIO');
+    if (currentRoom?.status === 'promptVoting') status = player.voted ? 'VOTED' : 'VOTING';
+    if (currentRoom?.status === 'recording') status = player.submitted ? 'SUBMITTED' : 'RECORDING';
+    if (currentRoom?.status === 'performanceVoting') status = player.voted ? 'VOTED' : 'VOTING';
     div.innerHTML = `<span>${escapeHtml(player.name)}</span><small>${status}</small>`;
     playersList.appendChild(div);
   });
 }
 
-function myPlayer(room = currentRoom) {
-  return room?.players?.find((player) => player.id === myId) || null;
-}
-
-function lockRecorderAfterSubmit() {
-  $('#recordBtn').disabled = true;
-  $('#stopBtn').disabled = true;
-  $('#submitClipBtn').disabled = true;
-  $('#clipStatus').textContent = 'Submitted. Waiting for the other players.';
-}
-
-function escapeHtml(str) {
-  return String(str).replace(/[&<>'"]/g, (ch) => ({
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#039;', '"': '&quot;'
-  }[ch]));
-}
-
 function renderQuickRooms(list = quickRooms) {
   quickRooms = list;
   const wrap = $('#quickRoomsList');
+  if (!wrap) return;
   wrap.innerHTML = '';
   if (!list.length) {
     wrap.innerHTML = '<div class="empty-state">NO ACTIVE QUICK ROOMS RIGHT NOW.</div>';
@@ -353,15 +335,8 @@ function renderQuickRooms(list = quickRooms) {
     card.type = 'button';
     card.dataset.code = room.code;
     card.innerHTML = `
-      <div>
-        <div class="room-host">${escapeHtml(room.hostName)}</div>
-        <div class="room-sub">${room.playersCount}/${room.maxPlayers} PLAYERS</div>
-      </div>
-      <div class="room-right">
-        <span class="room-code">${room.code}</span>
-        <small>QUICK</small>
-      </div>
-    `;
+      <div><div class="room-host">${escapeHtml(room.hostName)}</div><div class="room-sub">${room.playersCount}/${room.maxPlayers} PLAYERS</div></div>
+      <div class="room-right"><span class="room-code">${room.code}</span><small>QUICK</small></div>`;
     wrap.appendChild(card);
   });
 }
@@ -369,6 +344,7 @@ function renderQuickRooms(list = quickRooms) {
 function renderLeaderboard(list = leaderboard) {
   leaderboard = list;
   const body = $('#leaderboardBody');
+  if (!body) return;
   body.innerHTML = '';
   if (!list.length) {
     body.innerHTML = '<tr><td colspan="4" class="tiny-note">No results yet. Play a round and the leaderboard will populate.</td></tr>';
@@ -377,380 +353,348 @@ function renderLeaderboard(list = leaderboard) {
   list.forEach((entry) => {
     const rankClass = entry.rank === 1 ? 'gold' : entry.rank === 2 ? 'silver' : entry.rank === 3 ? 'bronze' : '';
     const row = document.createElement('tr');
-    row.innerHTML = `
-      <td class="rank ${rankClass}">${entry.rank}</td>
-      <td class="player">${escapeHtml(entry.name)}${entry.isAccount ? ' ✓' : ''}</td>
-      <td class="score">${entry.wins}</td>
-      <td>${entry.winRate}%</td>
-    `;
+    row.innerHTML = `<td class="rank ${rankClass}">${entry.rank}</td><td class="player">${escapeHtml(entry.name)}${entry.isAccount ? ' ✓' : ''}</td><td class="score">${entry.wins}</td><td>${entry.winRate}%</td>`;
     body.appendChild(row);
   });
 }
 
-function renderRoom(room) {
-  const previousStatus = currentRoom?.status;
-  const previousRound = currentRoom?.round;
-  currentRoom = room;
-
-  $('#activePlayers').textContent = String(room.totalPlayers || room.players?.length || 0).padStart(3, '0');
-  $('#roomCodeDisplay').textContent = room.code || '-----';
-  $('#lobbyMode').textContent = room.isQuick ? 'QUICK BATTLE' : 'CUSTOM';
-  $('#roomLink').value = `${window.location.origin}/?room=${room.code}`;
-  renderPlayers(room.players);
-  $('#submittedCount').textContent = room.submittedCount || 0;
-  $('#totalPlayers').textContent = room.totalPlayers || room.players?.length || 0;
-  $('#votedCount').textContent = room.votedCount || 0;
-
-  const amHost = room.hostId === myId;
-  $('#startRoundBtn').disabled = !amHost || room.status !== 'lobby';
-  $('#playAgainBtn').disabled = !amHost;
-
-  if (room.status === 'lobby') {
-    activePhaseKey = null;
-    clearInterval(tickTimer);
-    showScreen('lobbyScreen');
+function renderWriting(room) {
+  showScreen('writingScreen');
+  updateTimer(room.remainingSeconds, 'writingTimer');
+  const me = myPlayer(room);
+  const role = me?.role || 'line';
+  const roleTitle = $('#writingRoleTitle');
+  const instructions = $('#writingInstructions');
+  const input = $('#promptSubmissionInput');
+  const submit = $('#submitPromptBtn');
+  if (role === 'scenario') {
+    if (roleTitle) roleTitle.textContent = 'WRITE A SCENARIO';
+    if (instructions) instructions.innerHTML = 'Complete the prompt: <strong>Say it like...</strong>';
+    if (input) input.placeholder = 'you just got caught eating the wedding cake';
+  } else {
+    if (roleTitle) roleTitle.textContent = 'WRITE A LINE';
+    if (instructions) instructions.innerHTML = 'Write a short sentence someone can perform out loud.';
+    if (input) input.placeholder = 'I can explain.';
   }
-
-  if (room.status === 'recording') {
-    $('#roundLine').textContent = room.prompt?.line || '—';
-    $('#roundStyle').textContent = room.prompt?.style || '—';
-
-    const phaseKey = `${room.code}:${room.round}:recording`;
-    if (activePhaseKey !== phaseKey || previousStatus !== 'recording' || previousRound !== room.round) {
-      activePhaseKey = phaseKey;
-      recordedBlob = null;
-      resetRecorderUI(true);
-      updateTimer(room.remainingSeconds ?? room.phaseDuration ?? 60, 'recordTimer');
-    }
-
-    if (myPlayer(room)?.submitted) lockRecorderAfterSubmit();
-    showScreen('recordScreen');
-  }
-
-  if (room.status === 'voting') {
-    const phaseKey = `${room.code}:${room.round}:voting`;
-    if (activePhaseKey !== phaseKey || previousStatus !== 'voting' || previousRound !== room.round) {
-      activePhaseKey = phaseKey;
-      updateTimer(room.remainingSeconds ?? room.phaseDuration ?? 60, 'voteTimer');
-    }
-  }
-
-  if (room.status === 'results') {
-    activePhaseKey = null;
-    clearInterval(tickTimer);
-    showScreen('resultsScreen');
-  }
+  if (submit) submit.disabled = !!me?.submitted;
+  const submitted = $('#writingSubmittedCount');
+  const total = $('#writingTotalPlayers');
+  if (submitted) submitted.textContent = room.submittedCount || 0;
+  if (total) total.textContent = room.totalPlayers || 0;
 }
 
-function resetRecorderUI(clearBlob = true) {
-  if (clearBlob) recordedBlob = null;
-  $('#recordBtn').disabled = false;
-  $('#stopBtn').disabled = true;
-  $('#submitClipBtn').disabled = !recordedBlob;
-  $('#previewAudio').hidden = !recordedBlob;
-  if (recordedBlob) {
-    $('#previewAudio').src = URL.createObjectURL(recordedBlob);
-    $('#clipStatus').textContent = 'Preview ready. Submit it or record again.';
-  } else {
-    $('#previewAudio').removeAttribute('src');
-    $('#clipStatus').textContent = 'Click RECORD and perform the prompt.';
+function submitPromptEntry() {
+  const input = $('#promptSubmissionInput');
+  const text = input?.value.trim() || '';
+  socket.emit('prompt:submit', { text });
+}
+
+function renderPromptOptions(containerId, options, selectedId, type) {
+  const container = document.getElementById(containerId);
+  if (!container) return;
+  container.innerHTML = '';
+  options.forEach((option) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = `option-card${option.id === selectedId ? ' selected' : ''}`;
+    button.dataset.id = option.id;
+    button.innerHTML = `${type === 'line' ? `"${escapeHtml(option.text)}"` : `like ${escapeHtml(option.text)}`}<small>by ${escapeHtml(option.authorName || 'THE ACADEMY')}</small>`;
+    button.addEventListener('click', () => {
+      if (type === 'line') selectedLineId = option.id;
+      else selectedScenarioId = option.id;
+      renderPromptVoting(currentRoom, currentPromptVotingPayload);
+    });
+    container.appendChild(button);
+  });
+}
+
+function renderPromptVoting(room, payload = null) {
+  showScreen('promptVoteScreen');
+  updateTimer(room.remainingSeconds, 'promptVoteTimer');
+  const lines = payload?.lines || room.promptOptions?.lines || [];
+  const scenarios = payload?.scenarios || room.promptOptions?.scenarios || [];
+  if (!selectedLineId && lines[0]) selectedLineId = lines[0].id;
+  if (!selectedScenarioId && scenarios[0]) selectedScenarioId = scenarios[0].id;
+  renderPromptOptions('lineOptionsList', lines, selectedLineId, 'line');
+  renderPromptOptions('scenarioOptionsList', scenarios, selectedScenarioId, 'scenario');
+  const voted = $('#promptVotedCount');
+  if (voted) voted.textContent = room.votedCount || 0;
+  const submit = $('#submitPromptVoteBtn');
+  if (submit) submit.disabled = !!myPlayer(room)?.voted;
+}
+
+function submitPromptVote() {
+  if (!selectedLineId || !selectedScenarioId) {
+    showToast('Pick one line and one scenario.', true);
+    return;
   }
+  socket.emit('prompt:vote', { lineId: selectedLineId, scenarioId: selectedScenarioId });
+}
+
+function renderRecording(room) {
+  showScreen('recordScreen');
+  updateTimer(room.remainingSeconds, 'recordTimer');
+  const line = $('#roundLine');
+  const style = $('#roundStyle');
+  if (line) line.textContent = room.prompt?.line || '—';
+  if (style) style.textContent = room.prompt?.scenario ? `like ${room.prompt.scenario}` : (room.prompt?.style || '—');
+  const submitted = $('#submittedCount');
+  const total = $('#totalPlayers');
+  if (submitted) submitted.textContent = room.submittedCount || 0;
+  if (total) total.textContent = room.totalPlayers || 0;
+}
+
+function renderClipVoting(payload = currentPerformanceVotingPayload) {
+  if (!payload) return;
+  showScreen('votingScreen');
+  updateTimer(payload.remainingSeconds, 'voteTimer');
+  const line = $('#voteLine');
+  const style = $('#voteStyle');
+  if (line) line.textContent = payload.prompt?.line || '—';
+  if (style) style.textContent = payload.prompt?.scenario ? `like ${payload.prompt.scenario}` : (payload.prompt?.style || '—');
+
+  const list = $('#clipList');
+  if (!list) return;
+  list.innerHTML = '';
+  payload.clips.forEach((clip) => {
+    const card = document.createElement('div');
+    card.className = 'clip-card';
+    const isOwn = clip.clipId === payload.ownClipId;
+    card.innerHTML = `
+      <div class="clip-title">PERFORMANCE ${escapeHtml(clip.label)}${isOwn ? ' • YOURS' : ''}</div>
+      <audio controls src="${clip.audioData}"></audio>
+      <button class="pixel-btn vote-btn" ${isOwn ? 'disabled' : ''}>VOTE BEST PERFORMANCE</button>`;
+    card.querySelector('button')?.addEventListener('click', () => socket.emit('vote:submit', { clipId: clip.clipId }));
+    list.appendChild(card);
+  });
+  const voted = $('#votedCount');
+  if (voted && currentRoom) voted.textContent = currentRoom.votedCount || 0;
+}
+
+function renderResults(payload = currentResultsPayload) {
+  if (!payload) return;
+  showScreen('resultsScreen');
+  winSound();
+  const winnerText = $('#winnerText');
+  if (winnerText) winnerText.textContent = 'SAYITLIKE AWARDS CEREMONY';
+  const list = $('#resultsList');
+  if (!list) return;
+  const awards = payload.awards || {};
+  list.innerHTML = `
+    <div class="award-card"><div class="award-title">BEST LINE GOES TO</div><div class="award-value">"${escapeHtml(awards.bestLine?.text || payload.prompt?.line || '—')}"</div><div class="award-winner">${escapeHtml(awards.bestLine?.winnerName || 'THE ACADEMY')}</div></div>
+    <div class="award-card"><div class="award-title">BEST SCENARIO GOES TO</div><div class="award-value">like ${escapeHtml(awards.bestScenario?.text || payload.prompt?.scenario || '—')}</div><div class="award-winner">${escapeHtml(awards.bestScenario?.winnerName || 'THE ACADEMY')}</div></div>
+    <div class="award-card"><div class="award-title">BEST PERFORMANCE GOES TO</div><div class="award-value">${escapeHtml(awards.bestPerformance?.winnerName || 'Nobody')}</div><div class="award-winner">${awards.bestPerformance ? `${awards.bestPerformance.votes} votes` : 'No winning clip'}</div></div>
+    <div class="award-card"><div class="award-title">FINAL PROMPT</div><div class="award-value">${escapeHtml(promptText(payload.prompt))}</div></div>
+  `;
+
+  (payload.clips || []).sort((a, b) => b.votes - a.votes).forEach((clip) => {
+    const row = document.createElement('div');
+    row.className = 'result-row';
+    row.innerHTML = `<strong>${escapeHtml(clip.playerName)}</strong><span>${clip.votes} votes</span><audio controls src="${clip.audioData}"></audio>`;
+    list.appendChild(row);
+  });
+}
+
+function renderRoom(room) {
+  currentRoom = room;
+  if ($('#roomCodeDisplay')) $('#roomCodeDisplay').textContent = room.code || '-----';
+  if ($('#lobbyMode')) $('#lobbyMode').textContent = room.isQuick ? 'QUICK' : 'CUSTOM';
+  if ($('#activePlayers')) $('#activePlayers').textContent = String(room.totalPlayers || room.players?.length || 0).padStart(3, '0');
+  if ($('#roomLink')) $('#roomLink').value = `${location.origin}${location.pathname}?room=${room.code}`;
+  renderPlayers(room.players || []);
+
+  if (room.status === 'lobby') showScreen('lobbyScreen');
+  if (room.status === 'writing') renderWriting(room);
+  if (room.status === 'promptVoting') renderPromptVoting(room, currentPromptVotingPayload);
+  if (room.status === 'recording') renderRecording(room);
+  if (room.status === 'performanceVoting') renderClipVoting(currentPerformanceVotingPayload);
+  if (room.status === 'results') renderResults(currentResultsPayload || { prompt: room.prompt, awards: room.awards, clips: [] });
 }
 
 async function startRecording() {
   try {
-    if (myPlayer()?.submitted) {
-      showToast('You already submitted your clip.', true);
-      lockRecorderAfterSubmit();
-      return;
-    }
-    actionSound();
-    if (!navigator.mediaDevices?.getUserMedia) {
-      showToast('Your browser does not support microphone recording.', true);
-      return;
-    }
-
-    if (mediaStream) mediaStream.getTracks().forEach((t) => t.stop());
+    recordedBlob = null;
+    const preview = $('#previewAudio');
+    if (preview) preview.hidden = true;
     mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    const options = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-      ? { mimeType: 'audio/webm;codecs=opus' }
-      : {};
-
+    mediaRecorder = new MediaRecorder(mediaStream);
     const chunks = [];
-    mediaRecorder = new MediaRecorder(mediaStream, options);
-    mediaRecorder.ondataavailable = (event) => {
-      if (event.data.size > 0) chunks.push(event.data);
-    };
+    mediaRecorder.ondataavailable = (event) => { if (event.data?.size) chunks.push(event.data); };
     mediaRecorder.onstop = () => {
-      clearTimeout(recordStopTimer);
       recordedBlob = new Blob(chunks, { type: mediaRecorder.mimeType || 'audio/webm' });
-      mediaStream.getTracks().forEach((t) => t.stop());
-      mediaStream = null;
-      $('#previewAudio').src = URL.createObjectURL(recordedBlob);
-      $('#previewAudio').hidden = false;
-      $('#recordBtn').disabled = false;
-      $('#stopBtn').disabled = true;
-      $('#submitClipBtn').disabled = false;
-      $('#clipStatus').textContent = 'Clip ready. You can submit it or record again.';
-      softSound();
+      if (preview) {
+        preview.src = URL.createObjectURL(recordedBlob);
+        preview.hidden = false;
+      }
+      if ($('#submitClipBtn')) $('#submitClipBtn').disabled = false;
+      if ($('#clipStatus')) $('#clipStatus').textContent = 'Preview your clip, then submit.';
+      mediaStream?.getTracks().forEach((track) => track.stop());
     };
-
     mediaRecorder.start();
-    $('#recordBtn').disabled = true;
-    $('#stopBtn').disabled = false;
-    $('#submitClipBtn').disabled = true;
-    $('#clipStatus').textContent = 'Recording... max 10 seconds.';
+    if ($('#recordBtn')) $('#recordBtn').disabled = true;
+    if ($('#stopBtn')) $('#stopBtn').disabled = false;
+    if ($('#submitClipBtn')) $('#submitClipBtn').disabled = true;
+    if ($('#clipStatus')) $('#clipStatus').textContent = 'Recording... keep it under 10 seconds.';
+    clearTimeout(recordStopTimer);
     recordStopTimer = setTimeout(stopRecording, 10000);
   } catch (err) {
-    console.error('Recording failed:', err);
-    showToast('Recording failed. Check the browser console for details.', true);
+    showToast('Microphone access failed.', true);
   }
 }
 
 function stopRecording() {
+  clearTimeout(recordStopTimer);
   if (mediaRecorder && mediaRecorder.state !== 'inactive') mediaRecorder.stop();
+  if ($('#recordBtn')) $('#recordBtn').disabled = false;
+  if ($('#stopBtn')) $('#stopBtn').disabled = true;
 }
 
-function blobToDataURL(blob) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result);
-    reader.onerror = reject;
-    reader.readAsDataURL(blob);
-  });
-}
-
-async function submitClip() {
-  if (myPlayer()?.submitted) {
-    lockRecorderAfterSubmit();
-    showToast('You already submitted your clip.', true);
-    return;
-  }
+function submitClip() {
   if (!recordedBlob) {
     showToast('Record a clip first.', true);
     return;
   }
-  $('#submitClipBtn').disabled = true;
-  $('#clipStatus').textContent = 'Submitting...';
-  const audioData = await blobToDataURL(recordedBlob);
-  socket.emit('clip:submit', { audioData, mimeType: recordedBlob.type || 'audio/webm' });
+  const reader = new FileReader();
+  reader.onloadend = () => {
+    socket.emit('clip:submit', { audioData: reader.result, mimeType: recordedBlob.type || 'audio/webm' });
+  };
+  reader.readAsDataURL(recordedBlob);
 }
 
-function renderVoting(payload) {
-  currentVotingPayload = payload;
-  $('#voteLine').textContent = payload.prompt?.line || '—';
-  $('#voteStyle').textContent = payload.prompt?.style || '—';
-  activePhaseKey = `${currentRoom?.code || 'room'}:${currentRoom?.round || 'round'}:voting`;
-  updateTimer(payload.remainingSeconds ?? payload.phaseDuration ?? 60, 'voteTimer');
-
-  const clipList = $('#clipList');
-  clipList.innerHTML = '';
-  payload.clips.forEach((clip) => {
-    const row = document.createElement('div');
-    row.className = 'clip-row';
-    const isMine = clip.clipId === payload.ownClipId;
-    row.innerHTML = `
-      <div class="clip-id">CLIP ${clip.label}${isMine ? ' (YOU)' : ''}</div>
-      <audio controls src="${clip.audioData}"></audio>
-      <button class="vote-btn" ${isMine ? 'disabled' : ''} data-clip-id="${clip.clipId}">${isMine ? 'YOUR CLIP' : 'VOTE'}</button>
-    `;
-    clipList.appendChild(row);
-  });
-  showScreen('votingScreen');
+function lockRecorderAfterSubmit() {
+  if ($('#recordBtn')) $('#recordBtn').disabled = true;
+  if ($('#stopBtn')) $('#stopBtn').disabled = true;
+  if ($('#submitClipBtn')) $('#submitClipBtn').disabled = true;
+  if ($('#clipStatus')) $('#clipStatus').textContent = 'Submitted. Waiting for the other players.';
 }
 
-function submitVote(clipId) {
-  actionSound();
-  $$('.vote-btn').forEach((button) => { button.disabled = true; });
-  socket.emit('vote:submit', { clipId });
-}
-
-function renderResults(payload) {
-  currentResultsPayload = payload;
-  const winnerNames = payload.winners.map((w) => w.playerName).join(' + ');
-  $('#winnerText').textContent = winnerNames ? `WINNER: ${winnerNames.toUpperCase()}` : 'NO WINNER';
-  const winnerIds = new Set(payload.winners.map((w) => w.clipId));
-  const list = $('#resultsList');
-  list.innerHTML = '';
-
-  payload.clips.slice().sort((a, b) => b.votes - a.votes).forEach((clip) => {
-    const row = document.createElement('div');
-    row.className = `result-row ${winnerIds.has(clip.clipId) ? 'winner' : ''}`;
-    row.innerHTML = `
-      <div class="clip-id">CLIP ${clip.label}</div>
-      <div>
-        <div class="player">${escapeHtml(clip.playerName)}</div>
-        <audio controls src="${clip.audioData}"></audio>
-      </div>
-      <div class="score">${clip.votes} VOTE${clip.votes === 1 ? '' : 'S'}</div>
-    `;
-    list.appendChild(row);
-  });
-  loadAuthUser();
-  winSound();
-  showScreen('resultsScreen');
-}
-
-function leaveRoom() {
-  softSound();
-  socket.emit('room:leave');
-  currentRoom = null;
-  clearInterval(tickTimer);
-  showScreen('playScreen');
-}
-
-function setQuickTab(tab) {
-  $$('.browser-tab').forEach((btn) => btn.classList.toggle('active', btn.dataset.quickTab === tab));
-  $('#quickRoomsPane').classList.toggle('active', tab === 'rooms');
-  $('#quickCreatePane').classList.toggle('active', tab === 'create');
-}
-
-function initEvents() {
-  setNameFromStorage();
-  setVolumeUI();
-  loadAuthUser();
-  renderQuickRooms([]);
-  renderLeaderboard([]);
-
-  $('#playerName').addEventListener('input', getName);
-  $('#accountCard').addEventListener('click', () => showScreen('accountScreen'));
-  $('#accountCard').addEventListener('keydown', (event) => {
-    if (event.key === 'Enter' || event.key === ' ') showScreen('accountScreen');
-  });
-  $('#signupBtn').addEventListener('click', signup);
-  $('#loginBtn').addEventListener('click', login);
-  $('#logoutBtn').addEventListener('click', logout);
-  localStorage.removeItem('sayitlike_last_username');
-
-  $('#authPassword').addEventListener('keydown', (event) => {
-    if (event.key === 'Enter') login();
-  });
-  $('#authEmail').addEventListener('keydown', (event) => {
-    if (event.key === 'Enter') login();
+function setupEvents() {
+  $$('.menu-btn[data-screen], .back-btn[data-screen]').forEach((btn) => {
+    btn.addEventListener('click', () => { menuSound(); showScreen(btn.dataset.screen); });
   });
 
-  document.addEventListener('pointerdown', (event) => {
-    const clicky = event.target.closest('button, a');
-    if (!clicky) return;
-    if (clicky.classList.contains('back-btn') || clicky.classList.contains('modal-close')) softSound();
-    else if (clicky.classList.contains('menu-btn') || clicky.classList.contains('browser-tab') || clicky.classList.contains('room-card')) menuSound();
-    else if (clicky.classList.contains('pixel-btn') || clicky.classList.contains('vote-btn')) actionSound();
+  $('#accountCard')?.addEventListener('click', () => showScreen('accountScreen'));
+  $('#soundToggle')?.addEventListener('click', () => {
+    const panel = $('#volumePanel');
+    if (panel) panel.classList.toggle('open');
+  });
+  $('#volumeSlider')?.addEventListener('input', (event) => {
+    uiVolume = Number(event.target.value);
+    localStorage.setItem('sayitlike_volume', String(uiVolume));
+    setVolumeUI();
   });
 
-  $$('[data-screen]').forEach((el) => {
-    el.addEventListener('click', (event) => {
-      event.preventDefault();
-      const targetScreen = el.dataset.screen;
-      if (['playScreen', 'quickScreen', 'customScreen', 'lobbyScreen', 'recordScreen', 'votingScreen'].includes(targetScreen) && !requireLoginToPlay()) {
-        return;
-      }
-      showScreen(targetScreen);
+  $$('[data-quick-tab]').forEach((tab) => {
+    tab.addEventListener('click', () => {
+      $$('[data-quick-tab]').forEach((el) => el.classList.remove('active'));
+      $$('.quick-pane').forEach((el) => el.classList.remove('active'));
+      tab.classList.add('active');
+      const pane = tab.dataset.quickTab === 'create' ? $('#quickCreatePane') : $('#quickRoomsPane');
+      pane?.classList.add('active');
     });
   });
 
-  $('#soundToggle').addEventListener('click', (event) => {
-    event.stopPropagation();
-    $('#volumePanel').classList.toggle('open');
-    softSound();
-  });
-  document.addEventListener('click', (event) => {
-    const panel = $('#volumePanel');
-    const toggle = $('#soundToggle');
-    if (!panel.contains(event.target) && !toggle.contains(event.target)) panel.classList.remove('open');
-  });
-  $('#volumeSlider').addEventListener('input', () => {
-    uiVolume = Number($('#volumeSlider').value);
-    $('#volumeValue').textContent = `${uiVolume}%`;
-    localStorage.setItem('sayitlike_volume', String(uiVolume));
-  });
-  $('#volumeSlider').addEventListener('change', () => beep(740, 0.055, 0.7));
-
-  $('#quickBattleMenuBtn').addEventListener('click', () => {
-    setQuickTab('rooms');
-    socket.emit('quick:list');
-  });
-  $$('.browser-tab').forEach((btn) => btn.addEventListener('click', () => setQuickTab(btn.dataset.quickTab)));
-  $('#refreshQuickRoomsBtn').addEventListener('click', () => socket.emit('quick:list'));
-  $('#createQuickRoomBtn').addEventListener('click', () => {
-    if (!requireLoginToPlay()) return;
-    socket.emit('quick:create', { name: getName() });
-  });
-  $('#joinQuickRoomBtn').addEventListener('click', () => {
-    if (!requireLoginToPlay()) return;
-    socket.emit('quick:join', { name: getName(), code: $('#quickRoomCodeInput').value });
-  });
-  $('#quickRoomCodeInput').addEventListener('input', (e) => { e.target.value = e.target.value.toUpperCase(); });
-  $('#quickRoomCodeInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('#joinQuickRoomBtn').click(); });
-  $('#quickRoomsList').addEventListener('click', (e) => {
-    const card = e.target.closest('.room-card');
-    if (!card) return;
-    if (!requireLoginToPlay()) return;
-    socket.emit('quick:join', { name: getName(), code: card.dataset.code });
+  $('#refreshQuickRoomsBtn')?.addEventListener('click', () => socket.emit('quick:list'));
+  $('#createQuickRoomBtn')?.addEventListener('click', () => { if (requireLoginToPlay()) socket.emit('quick:create', { name: getName() }); });
+  $('#joinQuickRoomBtn')?.addEventListener('click', () => { if (requireLoginToPlay()) socket.emit('quick:join', { name: getName(), code: $('#quickRoomCodeInput')?.value }); });
+  $('#quickRoomsList')?.addEventListener('click', (event) => {
+    const card = event.target.closest('.room-card');
+    if (card && requireLoginToPlay()) socket.emit('quick:join', { name: getName(), code: card.dataset.code });
   });
 
-  $('#createRoomBtn').addEventListener('click', () => {
-    if (!requireLoginToPlay()) return;
-    socket.emit('custom:create', { name: getName() });
-  });
-  $('#joinRoomBtn').addEventListener('click', () => {
-    if (!requireLoginToPlay()) return;
-    socket.emit('custom:join', { name: getName(), code: $('#roomCodeInput').value });
-  });
-  $('#roomCodeInput').addEventListener('input', (e) => { e.target.value = e.target.value.toUpperCase(); });
-  $('#roomCodeInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('#joinRoomBtn').click(); });
+  $('#createRoomBtn')?.addEventListener('click', () => { if (requireLoginToPlay()) socket.emit('custom:create', { name: getName() }); });
+  $('#joinRoomBtn')?.addEventListener('click', () => { if (requireLoginToPlay()) socket.emit('custom:join', { name: getName(), code: $('#roomCodeInput')?.value }); });
+  $('#copyRoomBtn')?.addEventListener('click', () => copyText($('#roomLink')?.value || ''));
+  $('#startRoundBtn')?.addEventListener('click', () => socket.emit('round:start'));
+  $('#leaveLobbyBtn')?.addEventListener('click', () => socket.emit('room:leave'));
+  $('#leaveLobbyBtn2')?.addEventListener('click', () => socket.emit('room:leave'));
+  $('#backToLobbyBtn')?.addEventListener('click', () => showScreen('lobbyScreen'));
+  $('#playAgainBtn')?.addEventListener('click', () => socket.emit('round:start'));
+  $('#recordBtn')?.addEventListener('click', startRecording);
+  $('#stopBtn')?.addEventListener('click', stopRecording);
+  $('#submitClipBtn')?.addEventListener('click', submitClip);
 
-  $('#startRoundBtn').addEventListener('click', () => socket.emit('round:start'));
-  $('#playAgainBtn').addEventListener('click', () => socket.emit('round:start'));
-  $('#backToLobbyBtn').addEventListener('click', () => showScreen('lobbyScreen'));
-  $('#leaveLobbyBtn').addEventListener('click', leaveRoom);
-  $('#leaveLobbyBtn2').addEventListener('click', leaveRoom);
-  $('#copyRoomBtn').addEventListener('click', () => copyText($('#roomLink').value));
-
-  $('#recordBtn').addEventListener('click', startRecording);
-  $('#stopBtn').addEventListener('click', stopRecording);
-  $('#submitClipBtn').addEventListener('click', submitClip);
-
-  $('#clipList').addEventListener('click', (event) => {
-    const button = event.target.closest('.vote-btn');
-    if (!button || button.disabled) return;
-    submitVote(button.dataset.clipId);
-  });
-
-  const roomFromUrl = new URLSearchParams(location.search).get('room');
-  if (roomFromUrl) {
-    $('#roomCodeInput').value = roomFromUrl.toUpperCase();
-    if (authUser?.username) {
-      showScreen('customScreen');
-      showToast('Room code loaded. Click JOIN.');
-    } else {
-      showScreen('accountScreen');
-      showToast('Log in or create an account, then click JOIN.');
+  socket.on('app:hello', ({ playerId, user }) => {
+    myId = playerId;
+    if (user) {
+      authUser = user;
+      renderAuthUI();
     }
-  }
+  });
+  socket.on('app:error', (message) => showToast(message, true));
+  socket.on('game:notice', (message) => showToast(message));
+  socket.on('quick:list', renderQuickRooms);
+  socket.on('leaderboard:update', renderLeaderboard);
+  socket.on('room:joined', () => showScreen('lobbyScreen'));
+  socket.on('room:update', renderRoom);
+  socket.on('round:writing', () => { selectedLineId = null; selectedScenarioId = null; });
+  socket.on('prompt:submitted', () => {
+    const btn = $('#submitPromptBtn');
+    if (btn) btn.disabled = true;
+    showToast('Nominee submitted.');
+  });
+  socket.on('round:prompt-voting', (payload) => {
+    currentPromptVotingPayload = payload;
+    selectedLineId = payload.lines?.[0]?.id || null;
+    selectedScenarioId = payload.scenarios?.[0]?.id || null;
+    if (currentRoom) renderPromptVoting(currentRoom, payload);
+  });
+  socket.on('prompt:vote-submitted', () => showToast('Votes submitted.'));
+  socket.on('round:recording', ({ prompt, remainingSeconds }) => {
+    if (currentRoom) {
+      currentRoom.prompt = prompt;
+      currentRoom.remainingSeconds = remainingSeconds;
+      renderRecording(currentRoom);
+    }
+  });
+  socket.on('clip:submitted', lockRecorderAfterSubmit);
+  socket.on('round:performance-voting', (payload) => {
+    currentPerformanceVotingPayload = payload;
+    renderClipVoting(payload);
+  });
+  socket.on('vote:submitted', () => showToast('Vote submitted.'));
+  socket.on('round:results', (payload) => {
+    currentResultsPayload = payload;
+    renderResults(payload);
+  });
 }
 
-socket.on('app:hello', (payload) => {
-  myId = payload.playerId;
-  if ('user' in payload) {
-    authUser = payload.user || authUser;
-    renderAuthUI();
+function initCopy() {
+  const subtitle = $('.logo-subtitle');
+  if (subtitle) subtitle.textContent = 'WRITE THE LINE • WRITE THE SCENARIO • WIN THE PERFORMANCE';
+  const how = $('#howScreen .modal-inner');
+  if (how) {
+    how.innerHTML = `
+      <h2 class="modal-title">HOW TO PLAY</h2>
+      <div class="modal-kicker">SAYITLIKE AWARDS MODE</div>
+      <div class="section"><h3>1. WRITE</h3><p>Half the players write lines. Half write scenarios that complete <strong>Say it like...</strong></p></div>
+      <div class="section"><h3>2. VOTE THE PROMPT</h3><p>Everyone votes for Best Line and Best Scenario. The winners combine into the final prompt.</p></div>
+      <div class="section"><h3>3. PERFORM</h3><p>Everyone records the same winning prompt.</p></div>
+      <div class="section"><h3>4. AWARDS</h3><p>Best Line, Best Scenario, and Best Performance are revealed like a ridiculous award show.</p></div>`;
+  }
+  const recordKicker = $('#recordScreen .modal-kicker');
+  if (recordKicker) recordKicker.textContent = '35 SECONDS TO SUBMIT • 10 SECOND MAX CLIP';
+  const votingKicker = $('#votingScreen .modal-kicker');
+  if (votingKicker) votingKicker.textContent = 'LISTEN ANONYMOUSLY • VOTE FOR BEST PERFORMANCE';
+  const voteTimer = $('#voteTimer');
+  if (voteTimer) voteTimer.textContent = '45';
+  const recordTimer = $('#recordTimer');
+  if (recordTimer) recordTimer.textContent = '35';
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  injectAwardsScreens();
+  initCopy();
+  setVolumeUI();
+  setNameFromStorage();
+  setupEvents();
+  loadAuthUser();
+
+  const params = new URLSearchParams(location.search);
+  const roomCode = params.get('room');
+  if (roomCode) {
+    const input = $('#roomCodeInput');
+    if (input) input.value = roomCode.toUpperCase().slice(0, 5);
+    showScreen('customScreen');
   }
 });
-socket.on('app:error', (message) => showToast(message, true));
-socket.on('game:notice', (message) => showToast(message));
-socket.on('quick:list', renderQuickRooms);
-socket.on('leaderboard:update', renderLeaderboard);
-socket.on('room:joined', (payload) => {
-  currentRoom = { ...(currentRoom || {}), code: payload.code };
-  showToast(`Joined room ${payload.code}.`);
-});
-socket.on('room:update', renderRoom);
-socket.on('clip:submitted', () => {
-  lockRecorderAfterSubmit();
-  showToast('Clip submitted.');
-});
-socket.on('round:voting', renderVoting);
-socket.on('vote:submitted', () => showToast('Vote submitted.'));
-socket.on('round:results', renderResults);
-
-initEvents();
