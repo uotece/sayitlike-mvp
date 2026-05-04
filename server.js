@@ -18,6 +18,7 @@ const WRITING_SECONDS = 45;
 const PROMPT_VOTING_SECONDS = 25;
 const RECORDING_SECONDS = 35;
 const PERFORMANCE_VOTING_SECONDS = 45;
+const RESULTS_SECONDS = 30;
 const MAX_CLIP_BYTES = 1_400_000;
 const LEADERBOARD_LIMIT = 25;
 
@@ -231,6 +232,8 @@ function makeRoom(code = makeRoomCode(), isQuick = false) {
     promptVotes: new Map(),
     clips: new Map(),
     performanceVotes: new Map(),
+    activePlayerIds: new Set(),
+    resultsDone: new Set(),
     prompt: null,
     promptOptions: { lines: [], scenarios: [] },
     awards: null,
@@ -268,14 +271,38 @@ function beginTimedPhase(room, status, seconds, callback) {
   room.timers.phase = setTimeout(() => callback(room), seconds * 1000);
 }
 
+
+function isRoundPhase(room) {
+  return ['writing', 'promptVoting', 'recording', 'performanceVoting', 'results'].includes(room.status);
+}
+
+function isActivePlayer(room, playerId) {
+  if (!isRoundPhase(room)) return true;
+  if (!room.activePlayerIds || room.activePlayerIds.size === 0) return true;
+  return room.activePlayerIds.has(playerId);
+}
+
+function activePlayers(room) {
+  const players = [...room.players.values()];
+  if (!isRoundPhase(room) || !room.activePlayerIds || room.activePlayerIds.size === 0) return players;
+  return players.filter((player) => room.activePlayerIds.has(player.id));
+}
+
+function activePlayerIdsInRoom(room) {
+  return [...(room.activePlayerIds || new Set())].filter((id) => room.players.has(id));
+}
+
 function publicPlayers(room) {
   return [...room.players.values()].map((p) => {
+    const active = isActivePlayer(room, p.id);
+    const waiting = isRoundPhase(room) && !active;
     let submitted = false;
     let voted = false;
-    if (room.status === 'writing') submitted = room.submissions.has(p.id);
-    if (room.status === 'promptVoting') voted = room.promptVotes.has(p.id);
-    if (room.status === 'recording') submitted = !!p.submitted;
-    if (room.status === 'performanceVoting') voted = room.performanceVotes.has(p.id);
+    if (active && room.status === 'writing') submitted = room.submissions.has(p.id);
+    if (active && room.status === 'promptVoting') voted = room.promptVotes.has(p.id);
+    if (active && room.status === 'recording') submitted = !!p.submitted;
+    if (active && room.status === 'performanceVoting') voted = room.performanceVotes.has(p.id);
+    if (active && room.status === 'results') voted = room.resultsDone.has(p.id);
     return {
       id: p.id,
       name: p.name,
@@ -283,7 +310,8 @@ function publicPlayers(room) {
       isHost: p.id === room.hostId,
       submitted,
       voted,
-      role: room.assignments.get(p.id) || null,
+      role: active ? (room.assignments.get(p.id) || null) : null,
+      waiting,
       hasAccount: !!p.userId
     };
   });
@@ -291,6 +319,8 @@ function publicPlayers(room) {
 
 function roomPayload(room) {
   const players = [...room.players.values()];
+  const active = activePlayers(room);
+  const phaseTotal = isRoundPhase(room) && room.status !== 'results' ? active.length : players.length;
   return {
     code: room.code,
     isQuick: room.isQuick,
@@ -304,16 +334,21 @@ function roomPayload(room) {
     maxPlayers: MAX_PLAYERS,
     ...phasePayload(room),
     submittedCount: room.status === 'writing'
-      ? room.submissions.size
+      ? active.filter((p) => room.submissions.has(p.id)).length
       : room.status === 'recording'
-        ? players.filter((p) => p.submitted).length
+        ? active.filter((p) => p.submitted).length
         : 0,
     votedCount: room.status === 'promptVoting'
-      ? room.promptVotes.size
+      ? active.filter((p) => room.promptVotes.has(p.id)).length
       : room.status === 'performanceVoting'
-        ? room.performanceVotes.size
-        : 0,
-    totalPlayers: room.players.size
+        ? active.filter((p) => room.performanceVotes.has(p.id)).length
+        : room.status === 'results'
+          ? active.filter((p) => room.resultsDone.has(p.id)).length
+          : 0,
+    totalPlayers: phaseTotal,
+    roomPlayersCount: players.length,
+    activePlayersCount: active.length,
+    waitingPlayersCount: players.length - active.length
   };
 }
 
@@ -409,6 +444,10 @@ function shuffledPlayers(room) {
 }
 
 function startRound(room) {
+  if (room.status !== 'lobby') {
+    io.to(room.code).emit('app:error', 'Wait until the current results finish before starting another round.');
+    return;
+  }
   if (room.players.size < MIN_PLAYERS) {
     io.to(room.code).emit('app:error', `Need at least ${MIN_PLAYERS} players for Awards Mode.`);
     return;
@@ -428,9 +467,12 @@ function startRound(room) {
   room.promptVotes.clear();
   room.clips.clear();
   room.performanceVotes.clear();
+  room.resultsDone.clear();
+  room.activePlayerIds.clear();
   room.clipCounter = 0;
 
   const players = shuffledPlayers(room);
+  room.activePlayerIds = new Set(players.map((player) => player.id));
   const lineSlots = players.length / 2;
   players.forEach((player, index) => {
     room.assignments.set(player.id, index < lineSlots ? 'line' : 'scenario');
@@ -456,7 +498,8 @@ function submissionPayload(room) {
 
 function maybeEndWriting(room) {
   if (room.status !== 'writing') return;
-  if (room.submissions.size >= room.players.size) endWriting(room);
+  const ids = activePlayerIdsInRoom(room);
+  if (!ids.length || ids.every((id) => room.submissions.has(id))) endWriting(room);
 }
 
 function makeFallbackOption(type, index) {
@@ -474,7 +517,7 @@ function endWriting(room) {
 
   room.promptOptions = { lines, scenarios };
   room.promptVotes.clear();
-  for (const player of room.players.values()) player.voted = false;
+  for (const player of activePlayers(room)) player.voted = false;
 
   beginTimedPhase(room, 'promptVoting', PROMPT_VOTING_SECONDS, endPromptVoting);
   emitRoom(room);
@@ -483,7 +526,8 @@ function endWriting(room) {
 
 function maybeEndPromptVoting(room) {
   if (room.status !== 'promptVoting') return;
-  if (room.promptVotes.size >= room.players.size) endPromptVoting(room);
+  const ids = activePlayerIdsInRoom(room);
+  if (!ids.length || ids.every((id) => room.promptVotes.has(id))) endPromptVoting(room);
 }
 
 function pickWinner(options, votes, voteKey) {
@@ -520,7 +564,7 @@ function endPromptVoting(room) {
 
   room.clips.clear();
   room.performanceVotes.clear();
-  for (const player of room.players.values()) {
+  for (const player of activePlayers(room)) {
     player.submitted = false;
     player.voted = false;
   }
@@ -532,9 +576,8 @@ function endPromptVoting(room) {
 
 function maybeEndRecording(room) {
   if (room.status !== 'recording') return;
-  const activePlayers = [...room.players.values()];
-  const submitted = activePlayers.filter((p) => p.submitted).length;
-  if (submitted >= activePlayers.length) endRecording(room);
+  const active = activePlayers(room);
+  if (!active.length || active.every((p) => p.submitted)) endRecording(room);
 }
 
 function endRecording(room) {
@@ -552,7 +595,7 @@ function endRecording(room) {
     return;
   }
 
-  for (const player of room.players.values()) player.voted = false;
+  for (const player of activePlayers(room)) player.voted = false;
   beginTimedPhase(room, 'performanceVoting', PERFORMANCE_VOTING_SECONDS, endPerformanceVoting);
 
   const clips = [...room.clips.values()].map((clip, index) => ({
@@ -562,7 +605,7 @@ function endRecording(room) {
     mimeType: clip.mimeType
   }));
 
-  for (const player of room.players.values()) {
+  for (const player of activePlayers(room)) {
     const ownClip = [...room.clips.values()].find((clip) => clip.playerId === player.id);
     io.to(player.id).emit('round:performance-voting', {
       clips,
@@ -578,17 +621,14 @@ function endRecording(room) {
 
 function maybeEndPerformanceVoting(room) {
   if (room.status !== 'performanceVoting') return;
-  const possibleVoters = [...room.players.values()].filter((p) => room.clips.size > 1 || ![...room.clips.values()].some((c) => c.playerId === p.id));
-  if (room.performanceVotes.size >= possibleVoters.length) endPerformanceVoting(room);
+  const active = activePlayers(room);
+  const possibleVoters = active.filter((p) => room.clips.size > 1 || ![...room.clips.values()].some((c) => c.playerId === p.id));
+  if (!possibleVoters.length || possibleVoters.every((p) => room.performanceVotes.has(p.id))) endPerformanceVoting(room);
 }
 
 function endPerformanceVoting(room) {
   if (room.status !== 'performanceVoting') return;
-  clearPhaseTimer(room);
-  room.status = 'results';
-  room.endsAt = null;
-  room.phaseStartedAt = null;
-  room.phaseDuration = null;
+  beginTimedPhase(room, 'results', RESULTS_SECONDS, endResults);
 
   const tally = new Map();
   for (const clip of room.clips.values()) tally.set(clip.clipId, 0);
@@ -634,7 +674,7 @@ function endPerformanceVoting(room) {
   addAwardPoints(room.awards.bestScenario?.winnerId, 50);
 
   const accountUpdates = [];
-  for (const player of room.players.values()) {
+  for (const player of activePlayers(room)) {
     const bucksEarned = awardPoints.get(player.id) || 0;
     if (player.userId && firebaseReady && db) {
       accountUpdates.push(db.collection('users').doc(player.userId).set({
@@ -669,6 +709,35 @@ function endPerformanceVoting(room) {
   emitQuickRooms();
 }
 
+function maybeEndResults(room) {
+  if (room.status !== 'results') return;
+  const ids = activePlayerIdsInRoom(room);
+  if (!ids.length || ids.every((id) => room.resultsDone.has(id))) endResults(room);
+}
+
+function endResults(room) {
+  if (room.status !== 'results') return;
+  clearPhaseTimer(room);
+  room.status = 'lobby';
+  room.endsAt = null;
+  room.phaseStartedAt = null;
+  room.phaseDuration = null;
+  room.assignments.clear();
+  room.submissions.clear();
+  room.promptVotes.clear();
+  room.performanceVotes.clear();
+  room.resultsDone.clear();
+  room.clips.clear();
+  room.activePlayerIds.clear();
+  for (const player of room.players.values()) {
+    player.submitted = false;
+    player.voted = false;
+  }
+  io.to(room.code).emit('round:back-to-lobby');
+  emitRoom(room);
+  emitQuickRooms();
+}
+
 function leaveCurrentRoom(socket) {
   const code = socketRooms.get(socket.id);
   if (!code) return;
@@ -683,6 +752,8 @@ function leaveCurrentRoom(socket) {
   room.submissions.delete(socket.id);
   room.promptVotes.delete(socket.id);
   room.performanceVotes.delete(socket.id);
+  room.resultsDone.delete(socket.id);
+  room.activePlayerIds.delete(socket.id);
 
   for (const [clipId, clip] of room.clips.entries()) {
     if (clip.playerId === socket.id) {
@@ -703,6 +774,7 @@ function leaveCurrentRoom(socket) {
   if (room.status === 'promptVoting') maybeEndPromptVoting(room);
   if (room.status === 'recording') maybeEndRecording(room);
   if (room.status === 'performanceVoting') maybeEndPerformanceVoting(room);
+  if (room.status === 'results') maybeEndResults(room);
   emitRoom(room);
   emitQuickRooms();
 }
@@ -713,11 +785,6 @@ function joinRoom(socket, room, name) {
     socket.emit('app:error', 'This room is full.');
     return false;
   }
-  if (room.status !== 'lobby') {
-    socket.emit('app:error', 'This room already started. Create or join another room.');
-    return false;
-  }
-
   const authUser = socket.data.user || null;
   const cleanName = authUser ? authUser.username : (String(name || 'Guest').trim().slice(0, 16) || 'Guest');
   room.players.set(socket.id, { id: socket.id, userId: authUser ? authUser.id : null, name: cleanName, connected: true, submitted: false, voted: false });
@@ -798,7 +865,7 @@ io.on('connection', (socket) => {
   socket.on('prompt:submit', ({ text } = {}) => {
     const code = socketRooms.get(socket.id);
     const room = rooms.get(code);
-    if (!room || room.status !== 'writing') return;
+    if (!room || room.status !== 'writing' || !isActivePlayer(room, socket.id)) return;
     const player = room.players.get(socket.id);
     const role = room.assignments.get(socket.id);
     if (!player || !role) return;
@@ -818,7 +885,7 @@ io.on('connection', (socket) => {
   socket.on('prompt:vote', ({ lineId, scenarioId } = {}) => {
     const code = socketRooms.get(socket.id);
     const room = rooms.get(code);
-    if (!room || room.status !== 'promptVoting') return;
+    if (!room || room.status !== 'promptVoting' || !isActivePlayer(room, socket.id)) return;
     const player = room.players.get(socket.id);
     if (!player) return;
     const lineOk = room.promptOptions.lines.some((option) => option.id === lineId);
@@ -836,7 +903,7 @@ io.on('connection', (socket) => {
   socket.on('clip:submit', ({ audioData, mimeType } = {}) => {
     const code = socketRooms.get(socket.id);
     const room = rooms.get(code);
-    if (!room || room.status !== 'recording') return;
+    if (!room || room.status !== 'recording' || !isActivePlayer(room, socket.id)) return;
     const player = room.players.get(socket.id);
     if (!player) return;
     if (player.submitted) {
@@ -869,7 +936,7 @@ io.on('connection', (socket) => {
   socket.on('vote:submit', ({ clipId } = {}) => {
     const code = socketRooms.get(socket.id);
     const room = rooms.get(code);
-    if (!room || room.status !== 'performanceVoting') return;
+    if (!room || room.status !== 'performanceVoting' || !isActivePlayer(room, socket.id)) return;
     const player = room.players.get(socket.id);
     const clip = room.clips.get(String(clipId || ''));
     if (!player || !clip) return;
@@ -885,6 +952,16 @@ io.on('connection', (socket) => {
     socket.emit('vote:submitted');
     emitRoom(room);
     maybeEndPerformanceVoting(room);
+  });
+
+  socket.on('results:done', () => {
+    const code = socketRooms.get(socket.id);
+    const room = rooms.get(code);
+    if (!room || room.status !== 'results') return;
+    if (isActivePlayer(room, socket.id)) room.resultsDone.add(socket.id);
+    socket.emit('results:done');
+    emitRoom(room);
+    maybeEndResults(room);
   });
 
   socket.on('disconnect', () => leaveCurrentRoom(socket));

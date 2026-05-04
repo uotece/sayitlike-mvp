@@ -22,7 +22,8 @@ let firebaseAuth = null;
 let firebaseConfigured = false;
 let selectedLineId = null;
 let selectedScenarioId = null;
-let lastPhaseIntroKey = null;
+let phaseIntroShown = new Set();
+let localResultsDone = false;
 let lastRecordingResetKey = null;
 
 function getAudioContext() {
@@ -272,9 +273,9 @@ function injectPhaseIntro() {
   document.head.appendChild(style);
 }
 
-function showPhaseIntro(key, title, text) {
-  if (!key || lastPhaseIntroKey === key) return;
-  lastPhaseIntroKey = key;
+function showPhaseIntro(key, title, text, duration = 8600) {
+  if (!key || phaseIntroShown.has(key)) return;
+  phaseIntroShown.add(key);
   const overlay = $('#phaseIntroOverlay');
   if (!overlay) return;
   const titleEl = $('#phaseIntroTitle');
@@ -283,21 +284,37 @@ function showPhaseIntro(key, title, text) {
   if (textEl) textEl.textContent = text;
   overlay.hidden = false;
   clearTimeout(showPhaseIntro.timer);
-  showPhaseIntro.timer = setTimeout(() => { overlay.hidden = true; }, 7600);
+  showPhaseIntro.timer = setTimeout(() => { overlay.hidden = true; }, duration);
 }
 
 function updateLobbyControls(room) {
   const start = $('#startRoundBtn');
   const note = document.querySelector('.players-section .tiny-note');
   const me = myPlayer(room);
-  const playerCount = room?.players?.length || room?.totalPlayers || 0;
+  const playerCount = room?.roomPlayersCount || room?.players?.length || room?.totalPlayers || 0;
   const isHost = !!me?.isHost;
+  const waiting = !!me?.waiting;
 
-  if (note) note.textContent = 'Awards Mode needs an even number of players. Max 10 players. Host starts the round.';
+  if (note) {
+    if (waiting && room?.status !== 'lobby') {
+      note.textContent = 'A round is already in progress. You are in the room and will join the next round.';
+    } else if (room?.status === 'results') {
+      const remaining = room.remainingSeconds != null ? ` Results close in ${room.remainingSeconds}s.` : '';
+      note.textContent = `Waiting for players to return from the awards screen.${remaining}`;
+    } else {
+      note.textContent = 'Awards Mode needs an even number of players. Max 10 players. Host starts the round.';
+    }
+  }
+
   if (!start) return;
+  start.hidden = !isHost || waiting;
+  if (!isHost || waiting) return;
 
-  start.hidden = !isHost;
-  if (!isHost) return;
+  if (room?.status !== 'lobby') {
+    start.disabled = true;
+    start.textContent = room?.status === 'results' ? 'WAITING PLAYERS' : 'ROUND IN PROGRESS';
+    return;
+  }
 
   const hasEnough = playerCount >= 2;
   const isEven = playerCount % 2 === 0;
@@ -315,7 +332,8 @@ function leaveRoom() {
   currentResultsPayload = null;
   selectedLineId = null;
   selectedScenarioId = null;
-  lastPhaseIntroKey = null;
+  phaseIntroShown.clear();
+  localResultsDone = false;
   showScreen('playScreen');
   socket.emit('quick:list');
 }
@@ -356,8 +374,8 @@ function resetLocalRoundState() {
   currentResultsPayload = null;
   selectedLineId = null;
   selectedScenarioId = null;
-  lastPhaseIntroKey = null;
   lastRecordingResetKey = null;
+  localResultsDone = false;
   resetRecorderUI();
   const clipList = $('#clipList');
   if (clipList) clipList.innerHTML = '';
@@ -370,18 +388,11 @@ function resetLocalRoundState() {
 }
 
 function playAgain() {
-  const me = myPlayer();
-  if (me && !me.isHost) {
-    showToast('Only the host can start the next round.', true);
-    return;
-  }
-  const btn = $('#playAgainBtn');
-  if (btn) {
-    btn.disabled = true;
-    btn.textContent = 'STARTING...';
-  }
-  resetLocalRoundState();
-  socket.emit('round:start');
+  localResultsDone = true;
+  socket.emit('results:done');
+  showScreen('lobbyScreen');
+  updateLobbyControls(currentRoom);
+  showToast('Back in the room. Waiting for the next round.');
 }
 
 function injectAwardsScreens() {
@@ -464,10 +475,12 @@ function renderPlayers(players = []) {
     const div = document.createElement('div');
     div.className = 'player-chip';
     let status = player.isHost ? 'HOST' : 'READY';
-    if (currentRoom?.status === 'writing') status = player.submitted ? 'WRITTEN' : (player.role === 'line' ? 'LINE' : 'SCENARIO');
+    if (player.waiting) status = 'NEXT ROUND';
+    else if (currentRoom?.status === 'writing') status = player.submitted ? 'WRITTEN' : (player.role === 'line' ? 'LINE' : 'SCENARIO');
     if (currentRoom?.status === 'promptVoting') status = player.voted ? 'VOTED' : 'VOTING';
     if (currentRoom?.status === 'recording') status = player.submitted ? 'SUBMITTED' : 'RECORDING';
-    if (currentRoom?.status === 'performanceVoting') status = player.voted ? 'VOTED' : 'VOTING';
+    if (!player.waiting && currentRoom?.status === 'performanceVoting') status = player.voted ? 'VOTED' : 'VOTING';
+    if (!player.waiting && currentRoom?.status === 'results') status = player.voted ? 'IN ROOM' : 'AWARDS';
     div.innerHTML = `<span>${escapeHtml(player.name)}</span><small>${status}</small>`;
     playersList.appendChild(div);
   });
@@ -654,19 +667,24 @@ function renderResults(payload = currentResultsPayload) {
     <div class="award-card"><div class="award-title">FINAL PROMPT</div><div class="award-value">${escapeHtml(promptText(payload.prompt))}</div></div>
   `;
   const playAgain = $('#playAgainBtn');
-  const me = myPlayer();
   if (playAgain) {
-    playAgain.hidden = !!me && !me.isHost;
-    playAgain.disabled = false;
-    playAgain.textContent = 'PLAY AGAIN';
+    playAgain.hidden = false;
+    playAgain.disabled = localResultsDone;
+    playAgain.textContent = localResultsDone ? 'WAITING...' : 'BACK TO ROOM';
   }
+  const backToLobby = $('#backToLobbyBtn');
+  if (backToLobby) {
+    backToLobby.hidden = false;
+    backToLobby.textContent = 'BACK TO ROOM';
+  }
+  if (winnerText && payload.remainingSeconds != null) winnerText.textContent = `SAYITLIKE AWARDS CEREMONY • ${payload.remainingSeconds}s`;
 }
 
 function renderRoom(room) {
   currentRoom = room;
   if ($('#roomCodeDisplay')) $('#roomCodeDisplay').textContent = room.code || '-----';
   if ($('#lobbyMode')) $('#lobbyMode').textContent = room.isQuick ? 'QUICK' : 'CUSTOM';
-  if ($('#activePlayers')) $('#activePlayers').textContent = String(room.totalPlayers || room.players?.length || 0).padStart(3, '0');
+  if ($('#activePlayers')) $('#activePlayers').textContent = String(room.roomPlayersCount || room.totalPlayers || room.players?.length || 0).padStart(3, '0');
   if ($('#roomLink')) {
     const mode = room.isQuick ? 'quick' : 'custom';
     $('#roomLink').value = `${location.origin}${location.pathname}?room=${room.code}&mode=${mode}`;
@@ -674,26 +692,46 @@ function renderRoom(room) {
   renderPlayers(room.players || []);
   updateLobbyControls(room);
 
-  if (room.status === 'lobby') showScreen('lobbyScreen');
+  const me = myPlayer(room);
+  const waitingForNextRound = !!me?.waiting && room.status !== 'lobby';
+
+  if (room.status === 'lobby') {
+    localResultsDone = false;
+    showScreen('lobbyScreen');
+    return;
+  }
+
+  if (waitingForNextRound) {
+    showScreen('lobbyScreen');
+    return;
+  }
+
   if (room.status === 'writing') {
     renderWriting(room);
-    showPhaseIntro(`writing-${room.round}`, 'WRITE THE NOMINEES', 'Half the players write short lines. The other half write scenarios that complete Say it like...');
+    showPhaseIntro(`writing-${room.round}`, 'WRITE THE NOMINEES', 'Half the players write short lines. The other half write scenarios that complete Say it like...', 8600);
   }
   if (room.status === 'promptVoting') {
     renderPromptVoting(room, currentPromptVotingPayload);
-    showPhaseIntro(`promptVoting-${room.round}`, 'VOTE THE PROMPT', 'Vote for Best Line and Best Scenario. The winners combine into the final performance prompt.');
+    showPhaseIntro(`promptVoting-${room.round}`, 'VOTE THE PROMPT', 'Vote for Best Line and Best Scenario. The winners combine into the final performance prompt.', 8600);
   }
   if (room.status === 'recording') {
     renderRecording(room);
-    showPhaseIntro(`recording-${room.round}`, 'PERFORM', 'Record your best version of the winning prompt. Commit to it. You get one performance.');
+    showPhaseIntro(`recording-${room.round}`, 'PERFORM', 'Record your best version of the winning prompt. Commit to it. You get one performance.', 8600);
   }
   if (room.status === 'performanceVoting') {
     renderClipVoting(currentPerformanceVotingPayload);
-    showPhaseIntro(`performanceVoting-${room.round}`, 'VOTE PERFORMANCE', 'Listen anonymously and vote for the strongest performance. This award pays the most Bucks.');
+    showPhaseIntro(`performanceVoting-${room.round}`, 'VOTE PERFORMANCE', 'Listen anonymously and vote for the strongest performance. This award pays the most Bucks.', 8600);
   }
   if (room.status === 'results') {
-    renderResults(currentResultsPayload || { prompt: room.prompt, awards: room.awards, clips: [] });
-    showPhaseIntro(`results-${room.round}`, 'AWARDS CEREMONY', 'Best Performance pays 100 Bucks. Best Line and Best Scenario pay 50 Bucks each.');
+    const resultsPayload = { ...(currentResultsPayload || {}), prompt: room.prompt || currentResultsPayload?.prompt, awards: room.awards || currentResultsPayload?.awards, clips: currentResultsPayload?.clips || [], remainingSeconds: room.remainingSeconds };
+    currentResultsPayload = resultsPayload;
+    if (localResultsDone) {
+      showScreen('lobbyScreen');
+      updateLobbyControls(room);
+    } else {
+      renderResults(resultsPayload);
+      showPhaseIntro(`results-${room.round}`, 'AWARDS CEREMONY', 'The winners are about to be revealed. Best Performance pays the most.', 3600);
+    }
   }
 }
 
@@ -794,7 +832,7 @@ function setupEvents() {
   $('#startRoundBtn')?.addEventListener('click', () => socket.emit('round:start'));
   $('#leaveLobbyBtn')?.addEventListener('click', leaveRoom);
   $('#leaveLobbyBtn2')?.addEventListener('click', leaveRoom);
-  $('#backToLobbyBtn')?.addEventListener('click', () => showScreen('lobbyScreen'));
+  $('#backToLobbyBtn')?.addEventListener('click', playAgain);
   $('#playAgainBtn')?.addEventListener('click', playAgain);
   $('#recordBtn')?.addEventListener('click', startRecording);
   $('#stopBtn')?.addEventListener('click', stopRecording);
@@ -812,7 +850,7 @@ function setupEvents() {
   socket.on('quick:list', renderQuickRooms);
   socket.on('leaderboard:update', renderLeaderboard);
   socket.on('room:joined', () => showScreen('lobbyScreen'));
-  socket.on('room:left', () => { resetLocalRoundState(); showScreen('playScreen'); });
+  socket.on('room:left', () => { resetLocalRoundState(); phaseIntroShown.clear(); localResultsDone = false; showScreen('playScreen'); });
   socket.on('room:update', renderRoom);
   socket.on('round:writing', () => { resetLocalRoundState(); });
   socket.on('prompt:submitted', () => {
@@ -841,6 +879,8 @@ function setupEvents() {
     renderClipVoting(payload);
   });
   socket.on('vote:submitted', () => showToast('Vote submitted.'));
+  socket.on('results:done', () => { localResultsDone = true; showScreen('lobbyScreen'); updateLobbyControls(currentRoom); });
+  socket.on('round:back-to-lobby', () => { localResultsDone = false; resetLocalRoundState(); showScreen('lobbyScreen'); });
   socket.on('round:results', (payload) => {
     currentResultsPayload = payload;
     renderResults(payload);
