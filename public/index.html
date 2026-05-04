@@ -242,64 +242,25 @@
           <button class="modal-close back-btn" data-screen="homeScreen">X</button>
           <div class="modal-inner">
             <h2 class="modal-title">ACCOUNT</h2>
-            <div class="modal-kicker" id="authKicker">CREATE ACCOUNT OR SIGN IN</div>
+            <div class="modal-kicker">CREATE ACCOUNT OR SIGN IN</div>
 
-            <div id="authChoicePanel" class="auth-panel">
-              <div class="auth-choice-grid">
-                <button type="button" class="menu-btn active" id="showSignupBtn"><strong>CREATE ACCOUNT</strong><small>EMAIL + USERNAME + PASSWORD</small></button>
-                <button type="button" class="menu-btn" id="showLoginBtn"><strong>LOGIN</strong><small>EMAIL OR USERNAME + PASSWORD</small></button>
-              </div>
-              <p class="tiny-note">You need an account to play. Guest mode is only for browsing the site.</p>
-            </div>
-
-            <div id="authSignupPanel" class="auth-panel" hidden>
+            <div id="authGuestPanel" class="auth-panel">
               <div class="auth-form">
-                <label for="signupEmail">EMAIL</label>
-                <input id="signupEmail" type="email" placeholder="you@example.com" autocomplete="email" />
+                <label for="authEmail">EMAIL</label>
+                <input id="authEmail" type="email" placeholder="you@example.com" autocomplete="email" />
 
-                <label for="signupUsername">USERNAME</label>
-                <input id="signupUsername" maxlength="16" placeholder="public username" autocomplete="username" />
+                <label for="authUsername">USERNAME</label>
+                <input id="authUsername" maxlength="16" placeholder="username" autocomplete="username" />
 
-                <label for="signupPassword">PASSWORD</label>
-                <input id="signupPassword" type="password" maxlength="72" placeholder="password" autocomplete="new-password" />
+                <label for="authPassword">PASSWORD</label>
+                <input id="authPassword" type="password" maxlength="72" placeholder="password" autocomplete="current-password" />
 
                 <div class="action-row">
-                  <button type="button" class="pixel-btn" id="signupBtn">CREATE ACCOUNT</button>
-                  <button type="button" class="pixel-btn dark back-btn" id="signupBackBtn">BACK</button>
+                  <button class="pixel-btn" id="signupBtn">CREATE ACCOUNT</button>
+                  <button class="pixel-btn dark" id="loginBtn">LOGIN</button>
                 </div>
 
-                <p class="tiny-note">Username must be unique. Use 3-16 characters: letters, numbers, _ or -.</p>
-              </div>
-            </div>
-
-            <div id="authLoginPanel" class="auth-panel" hidden>
-              <div class="auth-form">
-                <label for="loginIdentifier">EMAIL OR USERNAME</label>
-                <input id="loginIdentifier" placeholder="email or username" autocomplete="username" />
-
-                <label for="loginPassword">PASSWORD</label>
-                <input id="loginPassword" type="password" maxlength="72" placeholder="password" autocomplete="current-password" />
-
-                <div class="action-row">
-                  <button type="button" class="pixel-btn" id="loginBtn">LOGIN</button>
-                  <button type="button" class="pixel-btn dark back-btn" id="loginBackBtn">BACK</button>
-                </div>
-
-                <button type="button" class="linkish auth-link" id="showForgotBtn">FORGOT PASSWORD?</button>
-              </div>
-            </div>
-
-            <div id="authForgotPanel" class="auth-panel" hidden>
-              <div class="auth-form">
-                <label for="forgotIdentifier">EMAIL OR USERNAME</label>
-                <input id="forgotIdentifier" placeholder="email or username" autocomplete="username" />
-
-                <div class="action-row">
-                  <button type="button" class="pixel-btn" id="resetPasswordBtn">SEND RESET EMAIL</button>
-                  <button type="button" class="pixel-btn dark back-btn" id="forgotBackBtn">BACK</button>
-                </div>
-
-                <p class="tiny-note">If the account exists, Firebase will send a password reset email.</p>
+                <p class="tiny-note">Firebase Auth uses email + password. Username is your public display name.</p>
               </div>
             </div>
 
@@ -308,14 +269,15 @@
                 <span id="authSignedUsername">SIGNED_IN</span>
                 <small id="authSignedStats">0 WINS</small>
               </div>
-              <p class="tiny-note">Your username is used automatically in rooms and leaderboard.</p>
+              <p class="tiny-note">Your username will be used automatically in rooms and leaderboard.</p>
               <div class="action-row">
-                <button type="button" class="pixel-btn dark back-btn" id="logoutBtn">LOGOUT</button>
+                <button class="pixel-btn dark back-btn" id="logoutBtn">LOGOUT</button>
               </div>
             </div>
           </div>
         </div>
       </section>
+
 
       <section class="modal-wrap screen" id="patchScreen">
         <div class="modal patch-modal">
@@ -323,28 +285,6 @@
           <div class="modal-inner patch-inner">
             <h2 class="modal-title">PATCH NOTES</h2>
             <div class="modal-kicker">CHANGES MADE IN EACH UPDATE.</div>
-
-
-            <article class="patch-card">
-              <h3>0.4.4</h3>
-              <h4>SEPARATE SIGNUP, LOGIN, AND PASSWORD RECOVERY</h4>
-              <time>2026-05-04</time>
-              <p>Account flow is now split into separate windows. Signup uses email, unique username, and password. Login accepts email or username. Password recovery sends a Firebase reset email.</p>
-              <div class="patch-grid">
-                <div>
-                  <h5>HIGHLIGHTS</h5>
-                  <p>+ Separate Create Account and Login screens.</p>
-                  <p>+ Username uniqueness enforced through Firestore.</p>
-                  <p>+ Login supports email or username.</p>
-                </div>
-                <div>
-                  <h5>FIXES</h5>
-                  <p>+ Rebuilt from stable v0.4.3 to preserve button navigation.</p>
-                  <p>+ Added password reset flow.</p>
-                  <p>+ Username lookup now resolves to email safely enough for MVP testing.</p>
-                </div>
-              </div>
-            </article>
 
             <article class="patch-card">
               <h3>0.4.3</h3>
@@ -441,7 +381,7 @@
           <a href="#" data-screen="creditsScreen">CREDITS</a>
           <a href="https://www.buymeacoffee.com/" target="_blank" rel="noopener noreferrer">DONATE</a>
         </nav>
-        <div class="status">ACTIVE PLAYERS: <span id="activePlayers">000</span> <span class="dot"></span> V 0.4.4 <span class="dot red"></span></div>
+        <div class="status">ACTIVE PLAYERS: <span id="activePlayers">000</span> <span class="dot"></span> V 0.4.3 <span class="dot red"></span></div>
       </footer>
     </main>
   </div>

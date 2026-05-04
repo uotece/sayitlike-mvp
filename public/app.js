@@ -191,34 +191,10 @@ async function saveProfile(idToken, username) {
   return data.user;
 }
 
-async function resolveLoginEmail(identifier) {
-  const res = await fetch('/api/users/resolve-login', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ identifier })
-  });
-
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || 'Could not find that account.');
-  return data.email;
-}
-
 function renderAuthUI() {
   const isSignedIn = !!authUser;
-
-  const choice = $('#authChoicePanel');
-  const signupPanel = $('#authSignupPanel');
-  const loginPanel = $('#authLoginPanel');
-  const forgotPanel = $('#authForgotPanel');
-  const userPanel = $('#authUserPanel');
-  const kicker = $('#authKicker');
-
-  if (choice) choice.hidden = isSignedIn;
-  if (signupPanel) signupPanel.hidden = true;
-  if (loginPanel) loginPanel.hidden = true;
-  if (forgotPanel) forgotPanel.hidden = true;
-  if (userPanel) userPanel.hidden = !isSignedIn;
-  if (kicker) kicker.textContent = isSignedIn ? 'SIGNED IN' : 'CREATE ACCOUNT OR SIGN IN';
+  $('#authGuestPanel').hidden = isSignedIn;
+  $('#authUserPanel').hidden = !isSignedIn;
 
   if (isSignedIn) {
     const display = authUser.username.toUpperCase().replace(/\s+/g, '_');
@@ -238,35 +214,6 @@ function renderAuthUI() {
   }
 }
 
-function showAuthPanel(panelName) {
-  if (authUser) {
-    renderAuthUI();
-    return;
-  }
-
-  const choice = $('#authChoicePanel');
-  const signupPanel = $('#authSignupPanel');
-  const loginPanel = $('#authLoginPanel');
-  const forgotPanel = $('#authForgotPanel');
-  const userPanel = $('#authUserPanel');
-  const kicker = $('#authKicker');
-
-  if (choice) choice.hidden = panelName !== 'choice';
-  if (signupPanel) signupPanel.hidden = panelName !== 'signup';
-  if (loginPanel) loginPanel.hidden = panelName !== 'login';
-  if (forgotPanel) forgotPanel.hidden = panelName !== 'forgot';
-  if (userPanel) userPanel.hidden = true;
-
-  const titles = {
-    choice: 'CREATE ACCOUNT OR SIGN IN',
-    signup: 'CREATE ACCOUNT',
-    login: 'LOGIN',
-    forgot: 'PASSWORD RECOVERY'
-  };
-
-  if (kicker) kicker.textContent = titles[panelName] || titles.choice;
-}
-
 async function loadAuthUser() {
   initFirebaseAuth();
 }
@@ -274,14 +221,9 @@ async function loadAuthUser() {
 async function signup() {
   try {
     requireFirebaseClient();
-    const email = $('#signupEmail').value.trim();
-    const username = $('#signupUsername').value.trim();
-    const password = $('#signupPassword').value;
-
-    if (!email || !username || !password) {
-      showToast('Fill email, username, and password.', true);
-      return;
-    }
+    const email = $('#authEmail').value.trim();
+    const username = $('#authUsername').value.trim();
+    const password = $('#authPassword').value;
 
     const credential = await firebaseAuth.createUserWithEmailAndPassword(email, password);
     await credential.user.updateProfile({ displayName: username });
@@ -299,42 +241,23 @@ async function signup() {
 async function login() {
   try {
     requireFirebaseClient();
-    const identifier = $('#loginIdentifier').value.trim();
-    const password = $('#loginPassword').value;
+    const email = $('#authEmail').value.trim();
+    const username = $('#authUsername').value.trim();
+    const password = $('#authPassword').value;
 
-    if (!identifier || !password) {
-      showToast('Enter email/username and password.', true);
-      return;
-    }
-
-    const email = await resolveLoginEmail(identifier);
     const credential = await firebaseAuth.signInWithEmailAndPassword(email, password);
     const idToken = await credential.user.getIdToken(true);
-    authUser = await fetchProfile(idToken);
+
+    // Important: if a username is typed in the login window, use it as the public name.
+    // Without this, existing Firebase accounts may fall back to the email prefix.
+    authUser = username
+      ? await saveProfile(idToken, username)
+      : await fetchProfile(idToken);
+
     renderAuthUI();
     socket.emit('auth:set', { idToken });
     showToast('Logged in.');
     showScreen($('#roomCodeInput').value ? 'customScreen' : 'playScreen');
-  } catch (err) {
-    showToast(err.message, true);
-  }
-}
-
-async function sendPasswordReset() {
-  try {
-    requireFirebaseClient();
-    const identifier = $('#forgotIdentifier').value.trim();
-
-    if (!identifier) {
-      showToast('Enter your email or username.', true);
-      return;
-    }
-
-    const email = await resolveLoginEmail(identifier);
-    await firebaseAuth.sendPasswordResetEmail(email);
-    showToast('Password reset email sent.');
-    showAuthPanel('login');
-    $('#loginIdentifier').value = identifier;
   } catch (err) {
     showToast(err.message, true);
   }
@@ -352,6 +275,328 @@ async function logout() {
   socket.emit('auth:clear');
   showToast('Logged out.');
   showScreen('homeScreen');
+}
+
+
+function setVolumeUI() {
+  $('#volumeSlider').value = uiVolume;
+  $('#volumeValue').textContent = `${uiVolume}%`;
+}
+
+function copyText(value) {
+  navigator.clipboard?.writeText(value)
+    .then(() => showToast('Copied.'))
+    .catch(() => showToast('Could not copy. Copy manually.', true));
+}
+
+function updateTimer(remainingSeconds, elementId) {
+  clearInterval(tickTimer);
+  const el = document.getElementById(elementId);
+  if (remainingSeconds == null || !el) return;
+
+  localTimerEnd = Date.now() + Math.max(0, Number(remainingSeconds)) * 1000;
+
+  const tick = () => {
+    const remaining = Math.max(0, Math.ceil((localTimerEnd - Date.now()) / 1000));
+    el.textContent = String(remaining).padStart(2, '0');
+    if (remaining <= 0) clearInterval(tickTimer);
+  };
+
+  tick();
+  tickTimer = setInterval(tick, 250);
+}
+
+function renderPlayers(players = []) {
+  const playersList = $('#playersList');
+  playersList.innerHTML = '';
+  players.forEach((player) => {
+    const div = document.createElement('div');
+    div.className = 'player-chip';
+    const status = currentRoom?.status === 'recording'
+      ? (player.submitted ? 'SUBMITTED' : 'RECORDING')
+      : currentRoom?.status === 'voting'
+        ? (player.voted ? 'VOTED' : 'VOTING')
+        : (player.isHost ? 'HOST' : 'READY');
+    div.innerHTML = `<span>${escapeHtml(player.name)}</span><small>${status}</small>`;
+    playersList.appendChild(div);
+  });
+}
+
+function myPlayer(room = currentRoom) {
+  return room?.players?.find((player) => player.id === myId) || null;
+}
+
+function lockRecorderAfterSubmit() {
+  $('#recordBtn').disabled = true;
+  $('#stopBtn').disabled = true;
+  $('#submitClipBtn').disabled = true;
+  $('#clipStatus').textContent = 'Submitted. Waiting for the other players.';
+}
+
+function escapeHtml(str) {
+  return String(str).replace(/[&<>'"]/g, (ch) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#039;', '"': '&quot;'
+  }[ch]));
+}
+
+function renderQuickRooms(list = quickRooms) {
+  quickRooms = list;
+  const wrap = $('#quickRoomsList');
+  wrap.innerHTML = '';
+  if (!list.length) {
+    wrap.innerHTML = '<div class="empty-state">NO ACTIVE QUICK ROOMS RIGHT NOW.</div>';
+    return;
+  }
+  list.forEach((room) => {
+    const card = document.createElement('button');
+    card.className = 'room-card';
+    card.type = 'button';
+    card.dataset.code = room.code;
+    card.innerHTML = `
+      <div>
+        <div class="room-host">${escapeHtml(room.hostName)}</div>
+        <div class="room-sub">${room.playersCount}/${room.maxPlayers} PLAYERS</div>
+      </div>
+      <div class="room-right">
+        <span class="room-code">${room.code}</span>
+        <small>QUICK</small>
+      </div>
+    `;
+    wrap.appendChild(card);
+  });
+}
+
+function renderLeaderboard(list = leaderboard) {
+  leaderboard = list;
+  const body = $('#leaderboardBody');
+  body.innerHTML = '';
+  if (!list.length) {
+    body.innerHTML = '<tr><td colspan="4" class="tiny-note">No results yet. Play a round and the leaderboard will populate.</td></tr>';
+    return;
+  }
+  list.forEach((entry) => {
+    const rankClass = entry.rank === 1 ? 'gold' : entry.rank === 2 ? 'silver' : entry.rank === 3 ? 'bronze' : '';
+    const row = document.createElement('tr');
+    row.innerHTML = `
+      <td class="rank ${rankClass}">${entry.rank}</td>
+      <td class="player">${escapeHtml(entry.name)}${entry.isAccount ? ' ✓' : ''}</td>
+      <td class="score">${entry.wins}</td>
+      <td>${entry.winRate}%</td>
+    `;
+    body.appendChild(row);
+  });
+}
+
+function renderRoom(room) {
+  const previousStatus = currentRoom?.status;
+  const previousRound = currentRoom?.round;
+  currentRoom = room;
+
+  $('#activePlayers').textContent = String(room.totalPlayers || room.players?.length || 0).padStart(3, '0');
+  $('#roomCodeDisplay').textContent = room.code || '-----';
+  $('#lobbyMode').textContent = room.isQuick ? 'QUICK BATTLE' : 'CUSTOM';
+  $('#roomLink').value = `${window.location.origin}/?room=${room.code}`;
+  renderPlayers(room.players);
+  $('#submittedCount').textContent = room.submittedCount || 0;
+  $('#totalPlayers').textContent = room.totalPlayers || room.players?.length || 0;
+  $('#votedCount').textContent = room.votedCount || 0;
+
+  const amHost = room.hostId === myId;
+  $('#startRoundBtn').disabled = !amHost || room.status !== 'lobby';
+  $('#playAgainBtn').disabled = !amHost;
+
+  if (room.status === 'lobby') {
+    activePhaseKey = null;
+    clearInterval(tickTimer);
+    showScreen('lobbyScreen');
+  }
+
+  if (room.status === 'recording') {
+    $('#roundLine').textContent = room.prompt?.line || '—';
+    $('#roundStyle').textContent = room.prompt?.style || '—';
+
+    const phaseKey = `${room.code}:${room.round}:recording`;
+    if (activePhaseKey !== phaseKey || previousStatus !== 'recording' || previousRound !== room.round) {
+      activePhaseKey = phaseKey;
+      recordedBlob = null;
+      resetRecorderUI(true);
+      updateTimer(room.remainingSeconds ?? room.phaseDuration ?? 60, 'recordTimer');
+    }
+
+    if (myPlayer(room)?.submitted) lockRecorderAfterSubmit();
+    showScreen('recordScreen');
+  }
+
+  if (room.status === 'voting') {
+    const phaseKey = `${room.code}:${room.round}:voting`;
+    if (activePhaseKey !== phaseKey || previousStatus !== 'voting' || previousRound !== room.round) {
+      activePhaseKey = phaseKey;
+      updateTimer(room.remainingSeconds ?? room.phaseDuration ?? 60, 'voteTimer');
+    }
+  }
+
+  if (room.status === 'results') {
+    activePhaseKey = null;
+    clearInterval(tickTimer);
+    showScreen('resultsScreen');
+  }
+}
+
+function resetRecorderUI(clearBlob = true) {
+  if (clearBlob) recordedBlob = null;
+  $('#recordBtn').disabled = false;
+  $('#stopBtn').disabled = true;
+  $('#submitClipBtn').disabled = !recordedBlob;
+  $('#previewAudio').hidden = !recordedBlob;
+  if (recordedBlob) {
+    $('#previewAudio').src = URL.createObjectURL(recordedBlob);
+    $('#clipStatus').textContent = 'Preview ready. Submit it or record again.';
+  } else {
+    $('#previewAudio').removeAttribute('src');
+    $('#clipStatus').textContent = 'Click RECORD and perform the prompt.';
+  }
+}
+
+async function startRecording() {
+  try {
+    if (myPlayer()?.submitted) {
+      showToast('You already submitted your clip.', true);
+      lockRecorderAfterSubmit();
+      return;
+    }
+    actionSound();
+    if (!navigator.mediaDevices?.getUserMedia) {
+      showToast('Your browser does not support microphone recording.', true);
+      return;
+    }
+
+    if (mediaStream) mediaStream.getTracks().forEach((t) => t.stop());
+    mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const options = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+      ? { mimeType: 'audio/webm;codecs=opus' }
+      : {};
+
+    const chunks = [];
+    mediaRecorder = new MediaRecorder(mediaStream, options);
+    mediaRecorder.ondataavailable = (event) => {
+      if (event.data.size > 0) chunks.push(event.data);
+    };
+    mediaRecorder.onstop = () => {
+      clearTimeout(recordStopTimer);
+      recordedBlob = new Blob(chunks, { type: mediaRecorder.mimeType || 'audio/webm' });
+      mediaStream.getTracks().forEach((t) => t.stop());
+      mediaStream = null;
+      $('#previewAudio').src = URL.createObjectURL(recordedBlob);
+      $('#previewAudio').hidden = false;
+      $('#recordBtn').disabled = false;
+      $('#stopBtn').disabled = true;
+      $('#submitClipBtn').disabled = false;
+      $('#clipStatus').textContent = 'Clip ready. You can submit it or record again.';
+      softSound();
+    };
+
+    mediaRecorder.start();
+    $('#recordBtn').disabled = true;
+    $('#stopBtn').disabled = false;
+    $('#submitClipBtn').disabled = true;
+    $('#clipStatus').textContent = 'Recording... max 10 seconds.';
+    recordStopTimer = setTimeout(stopRecording, 10000);
+  } catch (err) {
+    console.error('Recording failed:', err);
+    showToast('Recording failed. Check the browser console for details.', true);
+  }
+}
+
+function stopRecording() {
+  if (mediaRecorder && mediaRecorder.state !== 'inactive') mediaRecorder.stop();
+}
+
+function blobToDataURL(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+}
+
+async function submitClip() {
+  if (myPlayer()?.submitted) {
+    lockRecorderAfterSubmit();
+    showToast('You already submitted your clip.', true);
+    return;
+  }
+  if (!recordedBlob) {
+    showToast('Record a clip first.', true);
+    return;
+  }
+  $('#submitClipBtn').disabled = true;
+  $('#clipStatus').textContent = 'Submitting...';
+  const audioData = await blobToDataURL(recordedBlob);
+  socket.emit('clip:submit', { audioData, mimeType: recordedBlob.type || 'audio/webm' });
+}
+
+function renderVoting(payload) {
+  currentVotingPayload = payload;
+  $('#voteLine').textContent = payload.prompt?.line || '—';
+  $('#voteStyle').textContent = payload.prompt?.style || '—';
+  activePhaseKey = `${currentRoom?.code || 'room'}:${currentRoom?.round || 'round'}:voting`;
+  updateTimer(payload.remainingSeconds ?? payload.phaseDuration ?? 60, 'voteTimer');
+
+  const clipList = $('#clipList');
+  clipList.innerHTML = '';
+  payload.clips.forEach((clip) => {
+    const row = document.createElement('div');
+    row.className = 'clip-row';
+    const isMine = clip.clipId === payload.ownClipId;
+    row.innerHTML = `
+      <div class="clip-id">CLIP ${clip.label}${isMine ? ' (YOU)' : ''}</div>
+      <audio controls src="${clip.audioData}"></audio>
+      <button class="vote-btn" ${isMine ? 'disabled' : ''} data-clip-id="${clip.clipId}">${isMine ? 'YOUR CLIP' : 'VOTE'}</button>
+    `;
+    clipList.appendChild(row);
+  });
+  showScreen('votingScreen');
+}
+
+function submitVote(clipId) {
+  actionSound();
+  $$('.vote-btn').forEach((button) => { button.disabled = true; });
+  socket.emit('vote:submit', { clipId });
+}
+
+function renderResults(payload) {
+  currentResultsPayload = payload;
+  const winnerNames = payload.winners.map((w) => w.playerName).join(' + ');
+  $('#winnerText').textContent = winnerNames ? `WINNER: ${winnerNames.toUpperCase()}` : 'NO WINNER';
+  const winnerIds = new Set(payload.winners.map((w) => w.clipId));
+  const list = $('#resultsList');
+  list.innerHTML = '';
+
+  payload.clips.slice().sort((a, b) => b.votes - a.votes).forEach((clip) => {
+    const row = document.createElement('div');
+    row.className = `result-row ${winnerIds.has(clip.clipId) ? 'winner' : ''}`;
+    row.innerHTML = `
+      <div class="clip-id">CLIP ${clip.label}</div>
+      <div>
+        <div class="player">${escapeHtml(clip.playerName)}</div>
+        <audio controls src="${clip.audioData}"></audio>
+      </div>
+      <div class="score">${clip.votes} VOTE${clip.votes === 1 ? '' : 'S'}</div>
+    `;
+    list.appendChild(row);
+  });
+  loadAuthUser();
+  winSound();
+  showScreen('resultsScreen');
+}
+
+function leaveRoom() {
+  softSound();
+  socket.emit('room:leave');
+  currentRoom = null;
+  clearInterval(tickTimer);
+  showScreen('playScreen');
 }
 
 function setQuickTab(tab) {
@@ -372,27 +617,16 @@ function initEvents() {
   $('#accountCard').addEventListener('keydown', (event) => {
     if (event.key === 'Enter' || event.key === ' ') showScreen('accountScreen');
   });
-  $('#showSignupBtn').addEventListener('click', () => showAuthPanel('signup'));
-  $('#showLoginBtn').addEventListener('click', () => showAuthPanel('login'));
-  $('#signupBackBtn').addEventListener('click', () => showAuthPanel('choice'));
-  $('#loginBackBtn').addEventListener('click', () => showAuthPanel('choice'));
-  $('#forgotBackBtn').addEventListener('click', () => showAuthPanel('login'));
-  $('#showForgotBtn').addEventListener('click', () => showAuthPanel('forgot'));
-
   $('#signupBtn').addEventListener('click', signup);
   $('#loginBtn').addEventListener('click', login);
-  $('#resetPasswordBtn').addEventListener('click', sendPasswordReset);
   $('#logoutBtn').addEventListener('click', logout);
   localStorage.removeItem('sayitlike_last_username');
 
-  $('#signupPassword').addEventListener('keydown', (event) => {
-    if (event.key === 'Enter') signup();
-  });
-  $('#loginPassword').addEventListener('keydown', (event) => {
+  $('#authPassword').addEventListener('keydown', (event) => {
     if (event.key === 'Enter') login();
   });
-  $('#forgotIdentifier').addEventListener('keydown', (event) => {
-    if (event.key === 'Enter') sendPasswordReset();
+  $('#authEmail').addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') login();
   });
 
   document.addEventListener('pointerdown', (event) => {
