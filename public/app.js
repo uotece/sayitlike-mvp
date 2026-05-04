@@ -23,6 +23,7 @@ let firebaseConfigured = false;
 let selectedLineId = null;
 let selectedScenarioId = null;
 let lastPhaseIntroKey = null;
+let lastRecordingResetKey = null;
 
 function getAudioContext() {
   if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -282,7 +283,7 @@ function showPhaseIntro(key, title, text) {
   if (textEl) textEl.textContent = text;
   overlay.hidden = false;
   clearTimeout(showPhaseIntro.timer);
-  showPhaseIntro.timer = setTimeout(() => { overlay.hidden = true; }, 5600);
+  showPhaseIntro.timer = setTimeout(() => { overlay.hidden = true; }, 7600);
 }
 
 function updateLobbyControls(room) {
@@ -319,6 +320,70 @@ function leaveRoom() {
   socket.emit('quick:list');
 }
 
+function stopActiveRecorder() {
+  clearTimeout(recordStopTimer);
+  try {
+    if (mediaRecorder && mediaRecorder.state !== 'inactive') mediaRecorder.stop();
+  } catch {}
+  try { mediaStream?.getTracks().forEach((track) => track.stop()); } catch {}
+  mediaRecorder = null;
+  mediaStream = null;
+}
+
+function resetRecorderUI() {
+  stopActiveRecorder();
+  recordedBlob = null;
+  const preview = $('#previewAudio');
+  if (preview) {
+    try { if (preview.src && preview.src.startsWith('blob:')) URL.revokeObjectURL(preview.src); } catch {}
+    preview.removeAttribute('src');
+    preview.load?.();
+    preview.hidden = true;
+  }
+  const recordBtn = $('#recordBtn');
+  const stopBtn = $('#stopBtn');
+  const submitBtn = $('#submitClipBtn');
+  if (recordBtn) recordBtn.disabled = false;
+  if (stopBtn) stopBtn.disabled = true;
+  if (submitBtn) submitBtn.disabled = true;
+  const status = $('#clipStatus');
+  if (status) status.textContent = 'Waiting for microphone.';
+}
+
+function resetLocalRoundState() {
+  currentPromptVotingPayload = null;
+  currentPerformanceVotingPayload = null;
+  currentResultsPayload = null;
+  selectedLineId = null;
+  selectedScenarioId = null;
+  lastPhaseIntroKey = null;
+  lastRecordingResetKey = null;
+  resetRecorderUI();
+  const clipList = $('#clipList');
+  if (clipList) clipList.innerHTML = '';
+  const promptInput = $('#promptSubmissionInput');
+  if (promptInput) promptInput.value = '';
+  const submitPromptBtn = $('#submitPromptBtn');
+  if (submitPromptBtn) submitPromptBtn.disabled = false;
+  const submitPromptVoteBtn = $('#submitPromptVoteBtn');
+  if (submitPromptVoteBtn) submitPromptVoteBtn.disabled = false;
+}
+
+function playAgain() {
+  const me = myPlayer();
+  if (me && !me.isHost) {
+    showToast('Only the host can start the next round.', true);
+    return;
+  }
+  const btn = $('#playAgainBtn');
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'STARTING...';
+  }
+  resetLocalRoundState();
+  socket.emit('round:start');
+}
+
 function injectAwardsScreens() {
   if ($('#writingScreen')) return;
   const recordScreen = $('#recordScreen');
@@ -350,14 +415,14 @@ function injectAwardsScreens() {
   promptVote.innerHTML = `
     <div class="modal">
       <div class="modal-inner">
-        <h2 class="modal-title">THE NOMINEES</h2>
-        <div class="modal-kicker">VOTE FOR BEST LINE AND BEST SCENARIO</div>
+        <h2 class="modal-title">VOTE THE PROMPT</h2>
+        <div class="modal-kicker">PICK THE LINE AND SCENARIO EVERYONE WILL PERFORM</div>
         <div class="timer" id="promptVoteTimer">25</div>
         <div class="awards-vote-grid">
           <div class="section"><h3>BEST LINE</h3><div id="lineOptionsList" class="option-list"></div></div>
           <div class="section"><h3>BEST SCENARIO</h3><div id="scenarioOptionsList" class="option-list"></div></div>
         </div>
-        <div class="action-row"><button class="pixel-btn" id="submitPromptVoteBtn">SUBMIT VOTES</button></div>
+        <div class="action-row"><button class="pixel-btn" id="submitPromptVoteBtn">LOCK IN VOTES</button></div>
         <div class="waiting-bar"><span id="promptVotedCount">0</span> votes in</div>
       </div>
     </div>`;
@@ -373,11 +438,17 @@ function injectAwardsScreens() {
     .option-card{display:block;width:100%;text-align:left;background:#140a24;color:#fff4e4;border:2px solid #3f1d70;border-radius:14px;padding:12px;cursor:pointer;font-family:ui-monospace,monospace;text-transform:none}
     .option-card.selected{border-color:var(--green);box-shadow:0 0 0 2px rgba(34,197,94,.2)}
     .option-card small{display:block;color:var(--muted);margin-top:6px;text-transform:uppercase;font-size:9px}
-    .award-card{background:#140a24;border:2px solid #3f1d70;border-radius:16px;padding:14px;margin:10px 0}
-    .award-title{color:var(--green);font-size:12px;text-transform:uppercase;margin-bottom:6px}
-    .award-value{font-size:18px;color:#fff4e4;margin-bottom:6px}
+    .award-card{position:relative;overflow:hidden;background:#140a24;border:2px solid #3f1d70;border-radius:16px;padding:16px;margin:12px 0;animation:awardReveal .62s ease-out both}
+    .award-card:nth-child(1){animation-delay:.08s}.award-card:nth-child(2){animation-delay:.34s}.award-card:nth-child(3){animation-delay:.58s}.award-card:nth-child(4){animation-delay:.82s}
+    .award-card:before{content:'';position:absolute;inset:0;background:linear-gradient(110deg,transparent 0%,rgba(45,212,191,.18) 45%,transparent 62%);transform:translateX(-130%);animation:awardShine 1.4s ease-out both;animation-delay:.35s;pointer-events:none}
+    .main-award{border-color:var(--green);box-shadow:0 0 28px rgba(45,212,191,.25);animation:awardReveal .62s ease-out both,awardPulse 1.7s ease-in-out .7s 2}
+    .award-title{color:var(--green);font-size:12px;text-transform:uppercase;margin-bottom:6px;letter-spacing:1px}
+    .award-value{font-size:20px;color:#fff4e4;margin-bottom:6px;line-height:1.15}
     .award-winner{color:var(--muted);font-size:11px;text-transform:uppercase}.award-bucks{color:var(--green);font-size:13px;text-transform:uppercase;margin-top:6px}
-    @media(max-width:700px){.awards-vote-grid{grid-template-columns:1fr}.prompt-input{min-height:90px}}
+    @keyframes awardReveal{from{opacity:0;transform:translateY(28px) scale(.96)}to{opacity:1;transform:translateY(0) scale(1)}}
+    @keyframes awardPulse{0%,100%{box-shadow:0 0 28px rgba(45,212,191,.25)}50%{box-shadow:0 0 52px rgba(45,212,191,.55)}}
+    @keyframes awardShine{to{transform:translateX(130%)}}
+    @media(max-width:700px){.awards-vote-grid{grid-template-columns:1fr}.prompt-input{min-height:90px}.award-value{font-size:17px}}
   `;
   document.head.appendChild(style);
 
@@ -515,6 +586,13 @@ function submitPromptVote() {
 
 function renderRecording(room) {
   showScreen('recordScreen');
+  const recordingKey = `${room.code || 'room'}-${room.round || 0}`;
+  if (lastRecordingResetKey !== recordingKey) {
+    lastRecordingResetKey = recordingKey;
+    resetRecorderUI();
+  }
+  const me = myPlayer(room);
+  if (me?.submitted) lockRecorderAfterSubmit();
   updateTimer(room.remainingSeconds, 'recordTimer');
   const line = $('#roundLine');
   const style = $('#roundStyle');
@@ -570,11 +648,18 @@ function renderResults(payload = currentResultsPayload) {
   const scenarioBucks = bestScenario.bucks || 50;
 
   list.innerHTML = `
-    <div class="award-card main-award"><div class="award-title">BEST PERFORMANCE GOES TO</div><div class="award-value">${escapeHtml(bestPerformance.winnerName || 'Nobody')}</div><div class="award-winner">${bestPerformance.clipId ? `${bestPerformance.votes || 0} votes` : 'No winning clip'}</div><div class="award-bucks">+${performanceBucks} BUCKS</div></div>
-    <div class="award-card"><div class="award-title">BEST LINE GOES TO</div><div class="award-value">"${escapeHtml(bestLine.text || payload.prompt?.line || '—')}"</div><div class="award-winner">${escapeHtml(bestLine.winnerName || 'THE ACADEMY')}</div><div class="award-bucks">+${lineBucks} BUCKS</div></div>
-    <div class="award-card"><div class="award-title">BEST SCENARIO GOES TO</div><div class="award-value">${escapeHtml(scenarioText({ scenario: bestScenario.text || payload.prompt?.scenario || '—' }))}</div><div class="award-winner">${escapeHtml(bestScenario.winnerName || 'THE ACADEMY')}</div><div class="award-bucks">+${scenarioBucks} BUCKS</div></div>
+    <div class="award-card main-award"><div class="award-title">THE BIG AWARD • BEST PERFORMANCE</div><div class="award-value">${escapeHtml(bestPerformance.winnerName || 'Nobody')}</div><div class="award-winner">${bestPerformance.clipId ? `${bestPerformance.votes || 0} votes` : 'No winning clip'}</div><div class="award-bucks">+${performanceBucks} BUCKS</div></div>
+    <div class="award-card"><div class="award-title">BEST LINE</div><div class="award-value">"${escapeHtml(bestLine.text || payload.prompt?.line || '—')}"</div><div class="award-winner">${escapeHtml(bestLine.winnerName || 'THE ACADEMY')}</div><div class="award-bucks">+${lineBucks} BUCKS</div></div>
+    <div class="award-card"><div class="award-title">BEST SCENARIO</div><div class="award-value">${escapeHtml(scenarioText({ scenario: bestScenario.text || payload.prompt?.scenario || '—' }))}</div><div class="award-winner">${escapeHtml(bestScenario.winnerName || 'THE ACADEMY')}</div><div class="award-bucks">+${scenarioBucks} BUCKS</div></div>
     <div class="award-card"><div class="award-title">FINAL PROMPT</div><div class="award-value">${escapeHtml(promptText(payload.prompt))}</div></div>
   `;
+  const playAgain = $('#playAgainBtn');
+  const me = myPlayer();
+  if (playAgain) {
+    playAgain.hidden = !!me && !me.isHost;
+    playAgain.disabled = false;
+    playAgain.textContent = 'PLAY AGAIN';
+  }
 }
 
 function renderRoom(room) {
@@ -710,7 +795,7 @@ function setupEvents() {
   $('#leaveLobbyBtn')?.addEventListener('click', leaveRoom);
   $('#leaveLobbyBtn2')?.addEventListener('click', leaveRoom);
   $('#backToLobbyBtn')?.addEventListener('click', () => showScreen('lobbyScreen'));
-  $('#playAgainBtn')?.addEventListener('click', () => socket.emit('round:start'));
+  $('#playAgainBtn')?.addEventListener('click', playAgain);
   $('#recordBtn')?.addEventListener('click', startRecording);
   $('#stopBtn')?.addEventListener('click', stopRecording);
   $('#submitClipBtn')?.addEventListener('click', submitClip);
@@ -727,9 +812,9 @@ function setupEvents() {
   socket.on('quick:list', renderQuickRooms);
   socket.on('leaderboard:update', renderLeaderboard);
   socket.on('room:joined', () => showScreen('lobbyScreen'));
-  socket.on('room:left', () => showScreen('playScreen'));
+  socket.on('room:left', () => { resetLocalRoundState(); showScreen('playScreen'); });
   socket.on('room:update', renderRoom);
-  socket.on('round:writing', () => { selectedLineId = null; selectedScenarioId = null; });
+  socket.on('round:writing', () => { resetLocalRoundState(); });
   socket.on('prompt:submitted', () => {
     const btn = $('#submitPromptBtn');
     if (btn) btn.disabled = true;
@@ -751,6 +836,7 @@ function setupEvents() {
   });
   socket.on('clip:submitted', lockRecorderAfterSubmit);
   socket.on('round:performance-voting', (payload) => {
+    stopActiveRecorder();
     currentPerformanceVotingPayload = payload;
     renderClipVoting(payload);
   });
